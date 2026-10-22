@@ -28,6 +28,7 @@
 - 🗂 **幂等记账**：`state.json` 按岗位 ID + HR 去重，跨天保留额度
 - ⏱ **零 token 运行**：纯 Python + 本地浏览器桥，可挂 cron 无人值守
 - 🧩 **两种用法**：独立 CLI，或作为 Agent 技能（含访谈清单）
+- 🧾 **结构化输出**：任意命令加 `--json` 输出单个 JSON 对象（`schema` 固定版本），方便 harness / 脚本直接解析
 - 📦 **可复制**：整个目录交给别人就能用，改配置不改代码
 
 ## 工作原理
@@ -180,6 +181,35 @@ python3 scripts/boss_hunt.py run   [--send N] [--inbox]
 - 📅 约面试 某某公司｜区域经理 → 已回「先给时段，我确认后再答复」
 - 已关自己开的标签页 2 个
 ```
+
+### JSON 输出（给 harness / 脚本）
+
+任何命令都能加 `--json`（放全局位置或子命令后面都行）。stdout 只有一个 JSON 对象、
+没有其它文本；人读的块照样写进 `runs.log`，日志仍然可 grep。
+
+```bash
+python3 scripts/boss_hunt.py plan --json --top 5 | jq '.summary'
+python3 scripts/boss_hunt.py inbox --json | jq '.interviews'
+python3 scripts/boss_hunt.py validate --json   # 有错时 exit=1
+```
+
+固定字段：`schema`（当前 1）、`cmd`、`ok`。常用结构：
+
+| 命令 | 关键字段 |
+|--|--|
+| `plan --json` | `summary{candidates,grade_a,grade_b,unsent,remaining_today,daily_cap}`、`items[]{grade,score,job_id,title,salary,brand,city,district,flags,url}` |
+| `scan --json` | `pages_saved`、`errors[]`、`jobs_total`、`candidates`、`grade_a`、`grade_b` |
+| `send --json` | `sent`、`day_count`、`daily_cap`、`items[]{job_id,title,brand,salary,result}`、`skipped[]` |
+| `inbox --json` | `messages_total`、`new_messages`、`new_matches[]`、`interest[]`、`interviews[]`（含 `replied`）、`replied_ok[]`、`reply_failed[]` |
+| `validate --json` | `ok`、`errors[]`、`warnings[]`、`targets[]`、`daily_cap`、`timezone` |
+| `login-check --json` | `logged`、`bridge`、`extension`、`url` |
+| `preflight --json` | `logged`、`greeting_switch`、`day_count`、`daily_cap` |
+| `template --json` | `text`、`chars`、`marker`、`recommended_chars`、`hard_max` |
+| `run --json` | `scan`、`candidates`、`send`、`inbox`、`tabs_closed` |
+
+约定：`ok` 只表示「这条命令该做的事做成了」，**不等于「发出去了」**；发送结果看
+`items[].result`（`sent` / `skip_already_chatted` / `unverified` …）。`schema` 变更会在
+CHANGELOG 注明。
 
 ## 风控、边界与免责
 

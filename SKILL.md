@@ -132,6 +132,10 @@ python3 scripts/boss_hunt.py inbox                     # 盯消息 + 分类 + �
 python3 scripts/boss_hunt.py run   [--send N] [--inbox]
 ```
 
+**给 harness / 脚本调用时加 `--json`**：stdout 只有一个 JSON 对象（`schema` / `cmd` / `ok` +
+命令专用字段），人类文本仍写 `runs.log`。字段表见 README「JSON 输出」，或直接
+`python3 scripts/boss_hunt.py plan --json | jq .summary`。
+
 配置文件查找顺序：`--config PATH` → `$BOSS_HUNT_CONFIG` → `~/.boss-hunt/config.json`。
 
 ## 配置要点

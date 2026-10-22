@@ -42,6 +42,20 @@ python3 scripts/boss_hunt.py send 1          # 首跑只发 1 个
 python3 scripts/boss_hunt.py inbox           # 盯消息
 ```
 
+### 要解析结果就读 JSON，不要正则
+
+任何命令都能加 `--json`，stdout 只输出一个 JSON 对象（人类文本仍进 `runs.log`）：
+
+```bash
+python3 scripts/boss_hunt.py plan  --json --top 10   # .summary / .items[]
+python3 scripts/boss_hunt.py send  --json 2          # .items[].result
+python3 scripts/boss_hunt.py inbox --json            # .interviews[] / .interest[]
+python3 scripts/boss_hunt.py validate --json         # 有错 exit=1
+```
+
+`schema`（当前 1）随结构变化升级；`ok=true` 只代表命令执行成功，**不代表真的发出去了** ——
+发送结果看 `items[].result`。字段表见 README「JSON 输出」。
+
 脚本模式需要 huashu-chrome 扩展（用户手动装一次）。装不了或用户不愿意装，
 才走「代理模式」：用你自己的浏览器工具按 `docs/agent-adapters.md` 的映射
 驱动同一个已登录浏览器，代价是每步吃 token，适合 ≤10 个/天或调试。

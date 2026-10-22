@@ -547,6 +547,7 @@ def inbox(cfg, br, tab, st, out):
     sent_jids = st.get("sent") or {}
 
     fresh_hits, interest, interviews = [], [], []
+    replied_ok, reply_failed, followed_up = [], [], []
     n_fresh = 0
     for jid, it in items.items():
         info = it.get("lastMessageInfo") or {}
@@ -566,18 +567,25 @@ def inbox(cfg, br, tab, st, out):
         label = classify(txt, cfg)
         who = "%s｜%s｜%s" % (it.get("brandName") or "?", job.get("jobName") or txt[:20],
                               job.get("salaryDesc") or "")
+        meta = {"job_id": jid, "job_id_raw": it.get("jobId"), "brand": it.get("brandName"),
+                "boss": it.get("name"),
+                "title": job.get("jobName") or it.get("title"),
+                "salary": job.get("salaryDesc"), "city": job.get("cityName"), "score": sc,
+                "verdict": verdict, "label": label, "text": txt}
         if jid not in st["inbox_seen"] and verdict == "pass":
             st["inbox_seen"].append(jid)
-            fresh_hits.append((sc, who))
+            fresh_hits.append((sc, who, meta))
         if label == "interview":
-            interviews.append((jid, it, who))
+            interviews.append((jid, it, who, meta))
         elif label == "interested" and verdict == "pass":
-            interest.append((sc, who))
+            interest.append((sc, who, meta))
 
     fresh_hits.sort(key=lambda x: -x[0])
     interest.sort(key=lambda x: -x[0])
-    fresh_hits = [w for _, w in fresh_hits]
-    interest = [w for _, w in interest]
+    fresh_meta = [m for _, _, m in fresh_hits]
+    interest_meta = [m for _, _, m in interest]
+    fresh_hits = [w for _, w, _ in fresh_hits]
+    interest = [w for _, w, _ in interest]
 
     out.append("近 %d 小时新消息 %d 条（新招呼 %d）｜对口 %d｜感兴趣 %d｜约面试 %d"
                % (int(lookback), n_fresh, len(items), len(fresh_hits), len(interest), len(interviews)))
@@ -595,15 +603,17 @@ def inbox(cfg, br, tab, st, out):
     if (cfg.get("inbox") or {}).get("interview_auto_reply", True):
         reply = (cfg.get("user") or {}).get("interview_reply") or INTERVIEW_DEFAULT
         marker = "面试" if "面试" in reply else reply[:6]
-        for jid, it, who in interviews:
+        for jid, it, who, meta in interviews:
             if jid in st["replied"]:
                 continue
             res = reply_in_chat(br, tab, it.get("brandName") or "", reply, marker)
             if res == "replied":
                 st["replied"].append(jid)
                 out.append("📅 约面试 %s → 已回「先给时段，我确认后再答复」" % who)
+                replied_ok.append(meta)
             else:
                 out.append("⚠️ 约面试 %s → 回复失败(%s)，请手工回" % (who, res))
+                reply_failed.append(dict(meta, error=res))
 
     fu = (cfg.get("inbox") or {}).get("followup") or {}
     if fu.get("enabled"):
@@ -622,7 +632,20 @@ def inbox(cfg, br, tab, st, out):
             res = reply_in_chat(br, tab, it.get("brandName") or "", text, text[:6])
             st["followed"].append(jid)
             out.append("🔁 跟进 %s → %s" % (it.get("brandName") or "?", res))
-    return items
+            followed_up.append({"job_id": jid, "brand": it.get("brandName"), "result": res})
+    return {
+        "window_hours": int(lookback),
+        "messages_total": len(items),
+        "new_messages": n_fresh,
+        "new_matches": fresh_meta,
+        "interest": interest_meta,
+        "interviews": [dict(m, replied=(jid in st["replied"]))
+                       for jid, it, who, m in interviews],
+        "replied_ok": replied_ok,
+        "reply_failed": reply_failed,
+        "followed_up": followed_up,
+        "unread_semantics": "打开消息页会清零未读；本条按 msgTime + fromId 判定",
+    }
 
 
 # --------------------------------------------------------------------------
@@ -640,18 +663,51 @@ def emit(cfg, lines, quiet=False):
         print(block)
 
 
+SCHEMA = 1
+
+
+def emit_json(payload, cfg=None, lines=None):
+    """Machine-readable output for harnesses.
+
+    stdout gets exactly one JSON object (nothing else). The human-readable
+    block still lands in runs.log so the daily log stays greppable.
+    """
+    if cfg is not None and lines:
+        try:
+            head = "【%s %s】" % (stamp(cfg), cfg_tz(cfg).key.split("/")[-1])
+            block = head + "\n" + "\n".join("- " + str(x) for x in lines)
+            with open(cfg["paths"]["log"], "a", encoding="utf-8") as f:
+                f.write(block + "\n")
+        except Exception:
+            pass
+    out = {"schema": SCHEMA}
+    out.update(payload)
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+
+
+def want_json(args):
+    return bool(getattr(args, "json", False))
+
+
 def cmd_init(args):
     target = config_path(args)
     src = os.path.join(HERE, "..", "assets", "config.example.json")
     src = os.path.abspath(src)
     if os.path.exists(target) and not args.force:
-        print("已存在：%s（要覆盖加 --force）" % target)
+        if want_json(args):
+            emit_json({"cmd": "init", "ok": False, "error": "exists", "config": target})
+        else:
+            print("已存在：%s（要覆盖加 --force）" % target)
         return 1
     os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(src, encoding="utf-8") as f:
         data = f.read()
     with open(target, "w", encoding="utf-8") as f:
         f.write(data)
+    if want_json(args):
+        emit_json({"cmd": "init", "ok": True, "config": target,
+                   "next": "编辑 user/targets/filters，然后跑 validate"})
+        return 0
     print("已生成 %s\n下一步：把 user/targets/filters 填成你自己的情况，然后 `python3 boss_hunt.py validate`。"
           % target)
     return 0
@@ -661,6 +717,16 @@ def cmd_validate(args):
     path = config_path(args)
     cfg = load_config(path)
     errs, warns = validate_cfg(cfg)
+    if want_json(args):
+        cap = (cfg.get("sending") or {}).get("daily_cap")
+        emit_json({"cmd": "validate", "ok": not errs, "config": path,
+                   "workdir": cfg["paths"]["workdir"], "errors": errs, "warnings": warns,
+                   "targets": [{"name": t.get("name"), "city": t.get("city"),
+                                "city_code": t.get("city_code"),
+                                "keywords": t.get("keywords") or []}
+                               for t in (cfg.get("targets") or []) if t.get("enabled", True)],
+                   "daily_cap": cap, "timezone": cfg_tz(cfg).key})
+        return 1 if errs else 0
     print("配置：%s" % path)
     print("工作目录：%s" % cfg["paths"]["workdir"])
     for w in warns:
@@ -680,6 +746,11 @@ def cmd_template(args):
     job = {"jobName": args.job_name or "示例岗位", "brandName": args.brand or "示例公司",
            "cityName": args.city or "示例城市"}
     text = render((cfg.get("user") or {}).get("greeting_template") or "", cfg, job)
+    if want_json(args):
+        emit_json({"cmd": "template", "ok": 0 < len(text) <= 380, "text": text,
+                   "chars": len(text), "marker": verify_marker(cfg, job),
+                   "recommended_chars": [80, 200], "hard_max": 380})
+        return 0
     print(text)
     print("\n--- 校验标记：%r（发送后必须在弹窗里出现）" % verify_marker(cfg, job))
     print("字数：%d（建议 80–200 字；>380 会被拦）" % len(text))
@@ -690,20 +761,28 @@ def cmd_login(args):
     cfg = load_config(config_path(args))
     br = CM.Browser(cfg)
     bridge = br.connect()
-    lines = ["bridge:%s" % bridge, "extension:%s" % br.wake]
+    ext = br.wake
+    lines = ["bridge:%s" % bridge, "extension:%s" % ext]
+    logged, url, closed = False, "", 0
     try:
-        tab, st = check_login(br, cfg)
-        lines.append("页面：%s" % st.get("url", ""))
-        logged = bool(st.get("avatar")) and not st.get("login")
+        tab, stt = check_login(br, cfg)
+        url = stt.get("url", "")
+        lines.append("页面：%s" % url)
+        logged = bool(stt.get("avatar")) and not stt.get("login")
         if logged:
             lines.append("✅ 已登录（读到头像/用户区）")
-        elif st.get("login"):
+        elif stt.get("login"):
             lines.append("🔑 未登录：请在浏览器里用手机扫码登录，登录后重跑本命令")
         else:
             lines.append("❓ 无法确认：请让用户在浏览器打开 zhipin.com 自行确认")
     finally:
-        lines.append("已关自己开的标签页 %d 个" % br.close_own_tabs())
+        closed = br.close_own_tabs()
+        lines.append("已关自己开的标签页 %d 个" % closed)
         br.close()
+    if want_json(args):
+        emit_json({"cmd": "login-check", "ok": logged, "logged": logged, "bridge": bridge,
+                   "extension": ext, "url": url, "tabs_closed": closed}, cfg, lines)
+        return 0
     emit(cfg, lines)
     return 0
 
@@ -711,17 +790,31 @@ def cmd_login(args):
 def cmd_preflight(args):
     cfg = load_config(config_path(args))
     br = CM.Browser(cfg)
-    lines = ["bridge:%s" % br.connect(), "extension:%s" % br.wake]
+    bridge = br.connect()
+    ext = br.wake
+    lines = ["bridge:%s" % bridge, "extension:%s" % ext]
+    logged, gs, closed = False, "", 0
+    cap = int((cfg.get("sending") or {}).get("daily_cap") or 0)
+    day_count = None
     try:
-        tab, st = check_login(br, cfg)
-        lines.append("登录：%s" % ("ok" if (st.get("avatar") and not st.get("login")) else "未确认/未登录"))
-        lines.append("招呼语开关：%s" % greeting_switch(br, tab, fix=args.fix))
-        cap = int((cfg.get("sending") or {}).get("daily_cap") or 0)
-        st = load_state(cfg)
-        lines.append("今日已发 %s/%s（%s）" % (st.get("day_count"), cap, cfg_tz(cfg).key))
+        tab, stt = check_login(br, cfg)
+        logged = bool(stt.get("avatar")) and not stt.get("login")
+        lines.append("登录：%s" % ("ok" if logged else "未确认/未登录"))
+        gs = greeting_switch(br, tab, fix=args.fix)
+        lines.append("招呼语开关：%s" % gs)
+        state = load_state(cfg)
+        day_count = state.get("day_count")
+        lines.append("今日已发 %s/%s（%s）" % (day_count, cap, cfg_tz(cfg).key))
     finally:
-        lines.append("已关自己开的标签页 %d 个" % br.close_own_tabs())
+        closed = br.close_own_tabs()
+        lines.append("已关自己开的标签页 %d 个" % closed)
         br.close()
+    if want_json(args):
+        emit_json({"cmd": "preflight", "ok": logged and "auto_greeting_on" not in gs,
+                   "logged": logged, "greeting_switch": gs, "day_count": day_count,
+                   "daily_cap": cap, "bridge": bridge, "extension": ext,
+                   "tabs_closed": closed}, cfg, lines)
+        return 0
     emit(cfg, lines)
     return 0
 
@@ -729,7 +822,11 @@ def cmd_preflight(args):
 def cmd_scan(args):
     cfg = load_config(config_path(args))
     br = CM.Browser(cfg)
-    lines = ["bridge:%s" % br.connect(), "extension:%s" % br.wake]
+    bridge = br.connect()
+    ext = br.wake
+    lines = ["bridge:%s" % bridge, "extension:%s" % ext]
+    saved, errs, closed = 0, [], 0
+    jobs, cs = [], []
     try:
         saved, errs = scan(cfg, br, targets=args.target, keywords=args.keyword,
                            pages=args.pages)
@@ -741,8 +838,16 @@ def cmd_scan(args):
                      % (len(jobs), sum(1 for x in cs if x["grade"] == "A"),
                         sum(1 for x in cs if x["grade"] == "B")))
     finally:
-        lines.append("已关自己开的标签页 %d 个" % br.close_own_tabs())
+        closed = br.close_own_tabs()
+        lines.append("已关自己开的标签页 %d 个" % closed)
         br.close()
+    if want_json(args):
+        emit_json({"cmd": "scan", "ok": saved > 0, "pages_saved": saved, "errors": errs,
+                   "jobs_total": len(jobs), "candidates": len(cs),
+                   "grade_a": sum(1 for x in cs if x["grade"] == "A"),
+                   "grade_b": sum(1 for x in cs if x["grade"] == "B"),
+                   "bridge": bridge, "extension": ext, "tabs_closed": closed}, cfg, lines)
+        return 0
     emit(cfg, lines)
     return 0
 
@@ -765,6 +870,26 @@ def cmd_plan(args):
                         " / ".join(x["flags"]) if x["flags"] else "对口"))
     if len(todo) > args.top:
         lines.append("…另有 %d 个未列出" % (len(todo) - args.top))
+    if want_json(args):
+        emit_json({"cmd": "plan", "ok": True, "ts": stamp(cfg), "timezone": cfg_tz(cfg).key,
+                   "summary": {"candidates": len(cs),
+                               "grade_a": sum(1 for x in cs if x["grade"] == "A"),
+                               "grade_b": sum(1 for x in cs if x["grade"] == "B"),
+                               "unsent": len(todo), "remaining_today": left,
+                               "daily_cap": cap, "day_count": int(st.get("day_count") or 0)},
+                   "items": [{"grade": x["grade"], "score": x["score"],
+                              "job_id": x["job"]["encryptJobId"],
+                              "title": x["job"].get("jobName"),
+                              "salary": x["job"].get("salaryDesc"),
+                              "brand": x["job"].get("brandName"),
+                              "city": x["job"].get("cityName"),
+                              "district": x["job"].get("areaDistrict"),
+                              "flags": x["flags"],
+                              "url": "https://www.zhipin.com/job_detail/%s.html"
+                                     % x["job"]["encryptJobId"]}
+                             for x in todo[:args.top]],
+                   "not_listed": max(0, len(todo) - args.top)}, cfg, lines)
+        return 0
     emit(cfg, lines)
     return 0
 
@@ -774,13 +899,15 @@ def do_send(cfg, br, tab, st, want, out):
     budget = min(int(want), max(0, cap - int(st.get("day_count") or 0)))
     if budget <= 0:
         out.append("今日额度已用完 %d/%d，停止发送" % (st.get("day_count"), cap))
-        return 0
+        return {"sent": 0, "day_count": st.get("day_count"), "daily_cap": cap,
+                "items": [], "skipped": [], "reason": "quota_exhausted"}
     shares = {t.get("name"): t.get("daily_share") for t in (cfg.get("targets") or [])
               if t.get("daily_share")}
     cs = candidates(cfg)
     todo = [x for x in cs if x["job"]["encryptJobId"] not in (st.get("sent") or {})]
     gap = int((cfg.get("sending") or {}).get("min_gap_seconds") or 60)
     sent = 0
+    sent_items, skipped = [], []
     for x in todo:
         if sent >= budget:
             break
@@ -793,6 +920,8 @@ def do_send(cfg, br, tab, st, want, out):
         ck = "%s|%s" % (j.get("brandName"), j.get("bossName"))
         if ck in (st.get("contacts") or []):
             out.append("跳过(同 HR 已投) %s" % (j.get("jobName") or "")[:20])
+            skipped.append({"result": "skip_same_hr", "job_id": j.get("encryptJobId"),
+                            "title": j.get("jobName"), "brand": j.get("brandName")})
             continue
         res = send_one(br, tab, j, cfg)
         if res == "sent":
@@ -807,17 +936,26 @@ def do_send(cfg, br, tab, st, want, out):
             save_state(cfg, st)
             out.append("%s 已发｜%s｜%s｜%s" % (x["grade"], j.get("jobName"),
                                               j.get("brandName"), j.get("salaryDesc") or ""))
+            sent_items.append({"result": "sent", "grade": x["grade"], "score": x["score"],
+                               "job_id": j.get("encryptJobId"), "title": j.get("jobName"),
+                               "brand": j.get("brandName"), "salary": j.get("salaryDesc"),
+                               "city": j.get("cityName"), "target": tname})
             time.sleep(gap)
         elif res.startswith("skip_already") or res in ("skip_no_button",):
             out.append("跳过(%s) %s" % (res, (j.get("jobName") or "")[:20]))
+            skipped.append({"result": res, "job_id": j.get("encryptJobId"),
+                            "title": j.get("jobName"), "brand": j.get("brandName")})
             st.setdefault("contacts", []).append(ck)  # 已沟通过的岗位别再试
             save_state(cfg, st)
             time.sleep(4)
         else:
             out.append("跳过(%s) %s" % (res, (j.get("jobName") or "")[:20]))
+            skipped.append({"result": res, "job_id": j.get("encryptJobId"),
+                            "title": j.get("jobName"), "brand": j.get("brandName")})
             time.sleep(5)
     out.append("本轮发出 %d，今日累计 %d/%d" % (sent, st.get("day_count"), cap))
-    return sent
+    return {"sent": sent, "day_count": st.get("day_count"), "daily_cap": cap,
+            "items": sent_items, "skipped": skipped}
 
 
 def target_of(cfg, job):
@@ -832,18 +970,29 @@ def cmd_send(args):
     cfg = load_config(config_path(args))
     st = load_state(cfg)
     br = CM.Browser(cfg)
-    out = ["bridge:%s" % br.connect(), "extension:%s" % br.wake]
+    bridge = br.connect()
+    ext = br.wake
+    out = ["bridge:%s" % bridge, "extension:%s" % ext]
     tab = None
+    closed = 0
+    res = {"sent": 0, "day_count": st.get("day_count"),
+           "daily_cap": int((cfg.get("sending") or {}).get("daily_cap") or 0),
+           "items": [], "skipped": []}
     try:
         first = (cfg.get("targets") or [{}])[0]
         tab = br.new_tab("https://www.zhipin.com/web/geek/jobs?city=%s"
                          % str(first.get("city_code") or ""))
         time.sleep(3)
-        do_send(cfg, br, tab, st, args.n, out)
+        res = do_send(cfg, br, tab, st, args.n, out)
     finally:
-        out.append("已关自己开的标签页 %d 个" % br.close_own_tabs())
+        closed = br.close_own_tabs()
+        out.append("已关自己开的标签页 %d 个" % closed)
         br.close()
         save_state(cfg, st)
+    if want_json(args):
+        emit_json(dict(res, cmd="send", ts=stamp(cfg), bridge=bridge, extension=ext,
+                       tabs_closed=closed), cfg, out)
+        return 0
     emit(cfg, out)
     return 0
 
@@ -852,16 +1001,24 @@ def cmd_inbox(args):
     cfg = load_config(config_path(args))
     st = load_state(cfg)
     br = CM.Browser(cfg)
-    out = ["bridge:%s" % br.connect(), "extension:%s" % br.wake]
+    bridge = br.connect()
+    ext = br.wake
+    out = ["bridge:%s" % bridge, "extension:%s" % ext]
     tab = None
+    data, closed = {}, 0
     try:
         tab = br.new_tab("https://www.zhipin.com/web/geek/chat")
         time.sleep(4)
-        inbox(cfg, br, tab, st, out)
+        data = inbox(cfg, br, tab, st, out)
     finally:
-        out.append("已关自己开的标签页 %d 个" % br.close_own_tabs())
+        closed = br.close_own_tabs()
+        out.append("已关自己开的标签页 %d 个" % closed)
         br.close()
         save_state(cfg, st)
+    if want_json(args):
+        emit_json(dict(data, cmd="inbox", ts=stamp(cfg), bridge=bridge, extension=ext,
+                       tabs_closed=closed), cfg, out)
+        return 0
     emit(cfg, out)
     return 0
 
@@ -870,10 +1027,15 @@ def cmd_run(args):
     cfg = load_config(config_path(args))
     st = load_state(cfg)
     br = CM.Browser(cfg)
-    out = ["bridge:%s" % br.connect(), "extension:%s" % br.wake]
+    bridge = br.connect()
+    ext = br.wake
+    out = ["bridge:%s" % bridge, "extension:%s" % ext]
     tab = None
+    cs, closed = [], 0
+    scan_res, send_res, inbox_res = {"pages_saved": 0, "errors": []}, None, None
     try:
         scan_out = scan(cfg, br, pages=args.pages)
+        scan_res = {"pages_saved": scan_out[0], "errors": scan_out[1]}
         out.append("scan: +%d 页%s" % (scan_out[0], (" ⚠️ " + ",".join(scan_out[1])) if scan_out[1] else ""))
         cs = candidates(cfg)
         out.append("候选 %d（A%d/B%d）" % (len(cs), sum(1 for x in cs if x["grade"] == "A"),
@@ -884,66 +1046,93 @@ def cmd_run(args):
             tab = br.new_tab("https://www.zhipin.com/web/geek/jobs?city=%s"
                              % str((cfg.get("targets") or [{}])[0].get("city_code") or ""))
             time.sleep(3)
-            do_send(cfg, br, tab, st, per, out)
+            send_res = do_send(cfg, br, tab, st, per, out)
         if args.inbox:
             if tab is None:
                 tab = br.new_tab("https://www.zhipin.com/web/geek/chat")
                 time.sleep(4)
-            inbox(cfg, br, tab, st, out)
+            inbox_res = inbox(cfg, br, tab, st, out)
     finally:
-        out.append("已关自己开的标签页 %d 个" % br.close_own_tabs())
+        closed = br.close_own_tabs()
+        out.append("已关自己开的标签页 %d 个" % closed)
         br.close()
         save_state(cfg, st)
+    if want_json(args):
+        emit_json({"cmd": "run", "ok": True, "ts": stamp(cfg), "bridge": bridge,
+                   "extension": ext, "tabs_closed": closed, "scan": scan_res,
+                   "candidates": {"total": len(cs),
+                                  "grade_a": sum(1 for x in cs if x["grade"] == "A"),
+                                  "grade_b": sum(1 for x in cs if x["grade"] == "B")},
+                   "send": send_res, "inbox": inbox_res}, cfg, out)
+        return 0
     emit(cfg, out)
     return 0
+
+
+def add_json_flag(p):
+    """Accept --json after the subcommand too, without clobbering the global value."""
+    p.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                   help="输出单个 JSON 对象（给 harness / 脚本解析）")
 
 
 def build_parser():
     ap = argparse.ArgumentParser(description="BOSS直聘 求职助手（可移植版）")
     ap.add_argument("--config", help="配置文件路径（默认 ~/.boss-hunt/config.json）")
+    ap.add_argument("--json", action="store_true",
+                    help="输出单个 JSON 对象（给 harness / 脚本解析；人类文本仍进 runs.log）")
     sub = ap.add_subparsers(dest="cmd")
 
     p = sub.add_parser("init", help="生成配置模板")
     p.add_argument("--force", action="store_true")
+    add_json_flag(p)
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("validate", help="校验配置（不联网）")
+    add_json_flag(p)
     p.set_defaults(func=cmd_validate)
 
     p = sub.add_parser("template", help="预览招呼语")
     p.add_argument("--job-name")
     p.add_argument("--brand")
     p.add_argument("--city")
+    add_json_flag(p)
     p.set_defaults(func=cmd_template)
 
     p = sub.add_parser("login-check", help="只读确认登录态")
+    add_json_flag(p)
     p.set_defaults(func=cmd_login)
 
     p = sub.add_parser("preflight", help="登录 + 招呼语开关体检")
     p.add_argument("--fix", action="store_true", help="自动关掉 BOSS 自带的招呼语")
+    add_json_flag(p)
     p.set_defaults(func=cmd_preflight)
 
     p = sub.add_parser("scan", help="抓岗位列表")
     p.add_argument("--target", action="append", help="只跑某个 target.name（可重复）")
     p.add_argument("--keyword", action="append", help="只跑某些关键词（校准用）")
     p.add_argument("--pages", type=int, default=3)
+    add_json_flag(p)
     p.set_defaults(func=cmd_scan)
 
     p = sub.add_parser("plan", help="干跑：只报告不发送")
     p.add_argument("--top", type=int, default=20)
+    add_json_flag(p)
     p.set_defaults(func=cmd_plan)
 
     p = sub.add_parser("send", help="真发招呼")
     p.add_argument("n", type=int, help="本轮最多发几个（首跑建议 1-2）")
+    add_json_flag(p)
     p.set_defaults(func=cmd_send)
 
     p = sub.add_parser("inbox", help="盯收件箱")
+    add_json_flag(p)
     p.set_defaults(func=cmd_inbox)
 
     p = sub.add_parser("run", help="扫描 + 发送 + 收件箱")
     p.add_argument("--send", type=int, help="本轮发送数（默认用 schedule.per_window）")
     p.add_argument("--pages", type=int, default=3)
     p.add_argument("--inbox", action="store_true", help="同时处理收件箱")
+    add_json_flag(p)
     p.set_defaults(func=cmd_run)
     return ap
 

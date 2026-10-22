@@ -63,7 +63,22 @@ caffeinate -i -t 900 /usr/bin/python3 /path/to/boss-zhipin-jobhunt/scripts/boss_
 系统 cron 的时区只决定「什么时候触发」，两者不一致时会被记录到 `runs.log`，
 排查见 `docs/troubleshooting.md`。
 
-## 4. 跨 Agent 迁移注意
+## 4. 结构化输出（harness 集成）
+
+不需要正则、不需要解析中文：任何命令加 `--json`，stdout 就是一个 JSON 对象。
+
+```bash
+python3 scripts/boss_hunt.py plan  --json --top 20 | jq -r '.items[] | "\(.grade)\t\(.title)\t\(.brand)"'
+python3 scripts/boss_hunt.py inbox --json | jq '.interviews'
+python3 scripts/boss_hunt.py send  --json 3 | jq '{sent, day_count, skipped: (.skipped|length)}'
+```
+
+- 固定字段 `schema`（当前 1）、`cmd`、`ok`；命令专用字段见 README「JSON 输出」。
+- `ok` 是「命令跑通了」，不是「发出去了」：发送结果看 `items[].result`。
+- 人类可读块仍然写进 `runs.log`，日志排查方式不变。
+- `validate --json` 在配置有错时 `exit=1` 且 `errors[]` 非空 —— CI 里可以直接当检查用。
+
+## 5. 跨 Agent 迁移注意
 
 同一个 BOSS 账号只允许**一套实例**在跑。换 Agent 不等于换账号，但换机器/换目录时：
 

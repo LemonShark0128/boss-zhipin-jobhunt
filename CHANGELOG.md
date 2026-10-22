@@ -6,6 +6,9 @@
 ## [Unreleased]
 
 ### Added
+- `--json` 全局开关：所有子命令都能输出单个 JSON 对象（`schema`/`cmd`/`ok` + 命令专用字段），
+  供 harness / 脚本直接解析；人类可读块仍写 `runs.log`。`plan`/`send`/`inbox` 的条目带
+  `job_id`、`title`、`brand`、`salary`、`city`、`result` 等字段
 - `AGENTS.md`：Codex / Cursor 等不读 `SKILL.md` 的 Agent 的入口（读文件顺序、三条硬边界、
   默认脚本路径、交付前验证、不该做的事）
 - `docs/agent-adapters.md`：各 Agent 的工具映射表（技能装载路径、浏览器驱动方式、定时调度、
