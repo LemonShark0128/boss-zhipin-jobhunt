@@ -5,7 +5,17 @@
 
 ## [Unreleased]
 
+### Added
+- `AGENTS.md`：Codex / Cursor 等不读 `SKILL.md` 的 Agent 的入口（读文件顺序、三条硬边界、
+  默认脚本路径、交付前验证、不该做的事）
+- `docs/agent-adapters.md`：各 Agent 的工具映射表（技能装载路径、浏览器驱动方式、定时调度、
+  跨 Agent 迁移）
+
 ### Changed
+- 跨 Agent 化：`SKILL.md` 里 Hermes 专属的 `browser_exec(local=True)` / `cronjob_manage`
+  改为通用表述，Hermes 名放括号里；`docs/troubleshooting.md` 的定时排障同样通用化
+- README「作为 Hermes Agent 技能使用」→「作为 Agent 技能使用」，补 Claude Code / Codex /
+  Cursor 的装载方式与映射文档入口
 - `SKILL.md` 原「与本机旧版的关系」改为通用的「只跑一套（迁移时怎么搬）」：明确 `sent`/`contacts`/`replied`/`inbox_seen`
   与 `day`/`day_count` 必须随迁移交接（原表述写成「不要复制 state.json」，与实际需要相反）
 - `docs/troubleshooting.md` 补 macOS 睡眠掐跳一节（`pmset sleep 1`、`caffeinate` 边界、合盖无效）

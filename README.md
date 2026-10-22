@@ -24,7 +24,7 @@
 - 📬 **收件箱分类**：感兴趣 / 约面试 / 不合适；面试类只回「请先给时段，我确认后答复」，绝不自作主张
 - 🗂 **幂等记账**：`state.json` 按岗位 ID + HR 去重，跨天保留额度
 - ⏱ **零 token 运行**：纯 Python + 本地浏览器桥，可挂 cron 无人值守
-- 🧩 **两种用法**：独立 CLI，或作为 [Hermes Agent](https://hermes-agent.nousresearch.com/) 技能（含访谈清单）
+- 🧩 **两种用法**：独立 CLI，或作为 Agent 技能 —— [Hermes](https://hermes-agent.nousresearch.com/)、Claude Code 直接装载同一份 `SKILL.md`，Codex / Cursor 读 `AGENTS.md`
 - 📦 **可复制**：整个目录交给别人就能用，改配置不改代码
 
 ## 工作原理
@@ -193,7 +193,8 @@ python3 scripts/boss_hunt.py run   [--send N] [--inbox]
 ```text
 .
 ├── README.md                    # 面向使用者的说明（本文件）
-├── SKILL.md                     # Hermes Agent 技能说明（也可当流程文档读）
+├── SKILL.md                     # 技能/流程说明（Agent Skills 规范，Hermes 与 Claude Code 通用）
+├── AGENTS.md                    # 非 SKILL.md Agent 的入口（Codex / Cursor / 其他）
 ├── CHANGELOG.md                 # 版本变更
 ├── assets/config.example.json   # 配置模板
 ├── scripts/boss_hunt.py         # 主程序：scan / filter / send / inbox / run
@@ -204,17 +205,27 @@ python3 scripts/boss_hunt.py run   [--send N] [--inbox]
     ├── boss-site-notes.md       # 页面选择器、接口字段、城市码、桥返回格式
     ├── risk-control.md          # 额度与风控阈值（含来源与日期）
     ├── troubleshooting.md       # 桥/扩展/定时任务/收件箱故障
-    └── agent-driven-mode.md     # 没有 huashu-chrome 时用 Agent 驱动同一套动作
+    ├── agent-driven-mode.md     # 没有 huashu-chrome 时用 Agent 驱动同一套动作
+    └── agent-adapters.md        # 各 Agent 的工具映射（装载 / 浏览器 / 定时）
 ```
 
-## 作为 Hermes Agent 技能使用
+## 作为 Agent 技能使用
 
-```bash
-cp -r . ~/.hermes/skills/productivity/boss-zhipin-jobhunt
-```
+`SKILL.md` 符合 Agent Skills 规范（`name` + `description`），一份文件给所有 Agent 用。
 
-之后 Agent 会按 `SKILL.md` 的「访谈 → 登录 → 配置 → 干跑 → 定时」流程带你走一遍，
+| Agent | 怎么装 |
+|--|--|
+| Hermes | `cp -r . ~/.hermes/skills/productivity/boss-zhipin-jobhunt` |
+| Claude Code | `mkdir -p ~/.claude/skills && cp -r . ~/.claude/skills/boss-zhipin-jobhunt`（也可放项目内 `.claude/skills/`） |
+| Codex CLI | 不用装：克隆到任意位置，Codex 读仓库根的 `AGENTS.md` |
+| Cursor / 其他 | 同上，读 `AGENTS.md` |
+| 不用 Agent | 直接读 `SKILL.md` 当操作手册，跑脚本即可 |
+
+装好后 Agent 会按「访谈 → 登录 → 配置 → 干跑 → 定时」带你走一遍，
 包括问你没想起来的事（通勤圈、猎头、已投公司、多方向配额、已读不回跟进）。
+
+工具名怎么对应（浏览器、定时任务）见 [`docs/agent-adapters.md`](docs/agent-adapters.md)。
+注意：**脚本模式在所有 Agent 上完全一致**，只有「代理模式」和「挂定时」两处需要换工具。
 
 ## FAQ
 

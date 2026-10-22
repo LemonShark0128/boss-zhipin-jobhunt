@@ -7,6 +7,10 @@ description: BOSS直聘求职自动化：访谈需求→登录→筛选→打招
 
 > 公开仓库：<https://github.com/LemonShark0128/boss-zhipin-jobhunt>（MIT）。
 > 本目录是技能本体，同时就是仓库工作副本；对外交付给链接即可。
+>
+> 这个 `SKILL.md` 不是 Hermes 专属：frontmatter 符合 Agent Skills 规范，Hermes 和
+> Claude Code 用同一个文件直接装载；Codex / Cursor 等读仓库根的 `AGENTS.md`；
+> 各 Agent 的工具名映射见 `docs/agent-adapters.md`。
 
 把「帮用户在 BOSS 上找工作」跑成一个可交付的流程：先访谈需求，再让用户自己登录，
 然后按配置筛选、发招呼、盯回复。**所有个人信息都在 `config.json`，代码里没有任何人的经历、
@@ -15,8 +19,10 @@ description: BOSS直聘求职自动化：访谈需求→登录→筛选→打招
 两种跑法：
 
 - **脚本模式（推荐）**：`scripts/boss_hunt.py` + huashu-chrome，全程零 token，可定时。
-- **代理模式**：没有 huashu-chrome 时，Agent 自己用 `browser_exec(local=True)` 按
-  `docs/agent-driven-mode.md` 逐步做（耗 token，适合 ≤10 个/天或调试）。
+- **代理模式**：没有 huashu-chrome 时，Agent 用**自己的浏览器工具**按
+  `docs/agent-driven-mode.md` 逐步做（Hermes 是 `browser_exec(local=True)`；Claude Code /
+  Codex 挂 Playwright 或 chrome-devtools MCP；完整映射见 `docs/agent-adapters.md`）。
+  耗 token，适合 ≤10 个/天或调试。
 
 ## 硬边界（先跟用户讲清楚，别跳过）
 
@@ -109,9 +115,11 @@ cd ~/.boss-hunt
 caffeinate -i -t 900 /usr/bin/python3 <skill>/scripts/boss_hunt.py run --send 5 --inbox
 ```
 
-用 `cronjob_manage` 建 `no_agent=true` 的任务，时间按 `schedule.windows`（例 `0 11,15,21 * * *`，
-以配置时区求值）。`no_agent` 脚本崩了不会有聊天消息，只能从作业状态和
-`~/.boss-hunt/data/runs.log` 看到——改完必须用真实入口跑一遍再交付。
+挂定时与 Agent 无关：Hermes 用 `cronjob_manage` 建 `no_agent=true` 的任务；
+Claude Code / Codex 直接写系统 `crontab` 或 `launchd`（见 `docs/agent-adapters.md`）。
+时间按 `schedule.windows`（例 `0 11,15,21 * * *`，以配置时区求值）。
+纯脚本任务崩了不会有聊天消息，只能从作业状态和 `~/.boss-hunt/data/runs.log` 看到——
+改完必须用真实入口跑一遍再交付。
 
 ## 常用命令
 

@@ -57,8 +57,9 @@
 
 ## 定时任务静默失败
 
-- `no_agent` 脚本崩了不会有任何聊天消息，痕迹只在 cron 作业状态里；
-  用 `cronjob_manage(action='list')` 看 `last_status` / `last_error`。
+- 纯脚本任务（`no_agent`）崩了不会有任何聊天消息。Hermes 用
+  `cronjob_manage(action='list')` 看 `last_status` / `last_error`；
+  系统 crontab / launchd 则看 `data/cron.out` 与 `runs.log`。
 - 本地还要用**真实入口**跑一遍：`bash ~/.boss-hunt/run.sh`，别只测 `python3 boss_hunt.py`。
 - 脚本里所有「沿路径累加的列表/计数器」必须在任何 early return 之前初始化，
   否则第一次走到该分支就 `UnboundLocalError`，整跳一条都发不出去。

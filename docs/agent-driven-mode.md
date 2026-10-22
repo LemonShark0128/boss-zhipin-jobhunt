@@ -1,14 +1,17 @@
 # 没有 huashu-chrome 时的「代理驱动」模式
 
 `boss_hunt.py` 依赖 huashu-chrome（npm）把本地 Chrome 暴露成 MCP 工具。
-别的用户装不了/不想装时，可以让 **Agent 自己用 `browser_exec(local=True)`** 跑同一套动作：
+别的用户装不了/不想装时，可以让 **Agent 用自己的浏览器工具** 跑同一套动作
+（Hermes 是 `browser_exec(local=True)`；Claude Code / Codex 挂 Playwright 或 chrome-devtools MCP，
+映射见 [`agent-adapters.md`](agent-adapters.md)）：
 用户自己的浏览器、自己的登录态，不传 cookie、不代填密码。
 
 代价：每次运行消耗模型 token，适合 **10 个以内/天** 或调试；量大再装脚本模式。
 
 ## 0. 前置
 
-- `browser_exec(local=True)`：驱动用户本机 Chrome（含登录态）。
+- 你自己的浏览器工具：驱动用户本机 Chrome（含登录态）。Hermes 用 `browser_exec(local=True)`，
+  Claude Code / Codex 用挂载的 Playwright / chrome-devtools MCP，选择器与点击顺序完全一致。
 - 每次先 `ensure_real_tab()`，结束前关掉自己开的标签页（不要关用户的）。
 
 ## 1. 确认登录（只读，永不代填）
