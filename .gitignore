@@ -1,0 +1,19 @@
+# 运行时数据（含真实岗位/沟通记录，绝不入库）
+data/
+raw/
+state.json
+runs.log
+config.json
+.boss-hunt/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,108 @@
+{
+  "_readme": "把每一段改成你自己的情况，然后跑 python3 scripts/boss_hunt.py validate。带 _ 前缀的键只是说明，程序会忽略。",
+  "config_version": 1,
+  "user": {
+    "display_name": "张三",
+    "years_experience": 5,
+    "current_title": "商务拓展经理",
+    "industry": "SaaS 企业服务",
+    "highlights": [
+      "带 6 人团队做到年营收 1200 万",
+      "新签中大型客户 80+ 家，续约率 85%",
+      "从 0 搭建过两个城市的渠道体系"
+    ],
+    "_greeting_tip": "80–200 字、一句一个事实、必带 {job_name} 或 {brand} 让 HR 看出不是群发；不要写联系方式。",
+    "greeting_template": "您好，我有 {years} 年{industry}经验，{highlights}。看到贵司在招「{job_name}」，我的经历和这个岗位的客户拓展方向比较接近，方便的话想和您详细聊聊。",
+    "_interview_tip": "只表达愿意面、并请对方先给时段；绝不替用户答应具体时间。",
+    "interview_reply": "您好，方便安排线上面试吗？我这边时间需要先确认一下，您先给几个可选时段，我和您确认后再回复您，谢谢！",
+    "followup_template": "您好，之前给您发过消息，想确认下这个岗位还在招吗？我这边随时可以聊。"
+  },
+  "targets": [
+    {
+      "name": "主方向-上海",
+      "city": "上海",
+      "city_code": "101020100",
+      "keywords": ["商务拓展经理", "BD经理"],
+      "daily_share": 10,
+      "enabled": true
+    },
+    {
+      "name": "次方向-杭州",
+      "city": "杭州",
+      "city_code": "101210100",
+      "keywords": ["渠道经理"],
+      "daily_share": 5,
+      "enabled": true
+    }
+  ],
+  "_filters_tip": "硬门槛宁可少设。salary_min_k / industry_block / title_block 是最有效的三个。",
+  "filters": {
+    "salary_min_k": 15,
+    "reject_unknown_salary": false,
+    "require_title_match": false,
+    "title_allow": ["经理", "主管", "总监", "负责人", "BDM"],
+    "title_block": ["专员", "助理", "实习生", "兼职", "电销", "文员", "客服", "客户成功", "储备", "学徒", "导购", "店员"],
+    "industry_allow": ["互联网", "企业服务", "SaaS", "电商", "本地生活"],
+    "industry_block": ["保险", "房产", "房地产", "中介", "教育培训", "人力资源", "劳务", "外包", "派遣", "贷款", "证券", "基金", "理财", "医美", "美容", "4S", "婚恋", "装修"],
+    "brand_block": [],
+    "hr_block": [],
+    "text_block": ["无底薪", "纯提成", "日结", "包住", "自备车", "招商加盟", "高薪诚聘", "合伙人机制"],
+    "districts_allow": [],
+    "exclude_headhunter": true,
+    "exclude_proxy": true,
+    "experience": {
+      "job_min_years_max": 8,
+      "job_max_years_min": 2,
+      "_tip": "岗位要求的下限超过 job_min_years_max → 判为够不到；上限低于 job_max_years_min → 判为过于初级"
+    },
+    "degree_max": "本科"
+  },
+  "scoring": {
+    "big_brands": ["字节", "阿里", "腾讯", "美团", "京东", "拼多多", "小红书", "快手"],
+    "big_brand": 3,
+    "industry_allow": 2,
+    "title_allow": 2,
+    "keyword_in_title": 2,
+    "boss_online": 1,
+    "salary_high_from_k": 20,
+    "salary_high": 1,
+    "welfare": ["五险一金", "双休"],
+    "welfare_hit": 1,
+    "a_min": 4,
+    "min_score": 2
+  },
+  "sending": {
+    "_tip": "首跑一定先 send 1，看 HR 反应再调；daily_cap 建议 15–20，min_gap_seconds 不要低于 60。",
+    "daily_cap": 15,
+    "min_gap_seconds": 60
+  },
+  "inbox": {
+    "lookback_hours": 72,
+    "max_listed": 5,
+    "interview_auto_reply": true,
+    "patterns": {
+      "reject": "不合适|不匹配|不符合|已招满|招满了|暂不考虑|不太适合|遗憾|已招到",
+      "interview": "面试|面谈|复试|初试|约个?时间|什么时候方便|线上|线下|面试官",
+      "interested": "感兴趣|有兴趣|简历|方便沟通|聊聊|沟通一下|想了解|加个微信|加微信"
+    },
+    "followup": {
+      "_tip": "对已读不回 48h 的岗位补一句，转化率通常高于单纯加量投递；默认关。",
+      "enabled": false,
+      "after_hours": 48
+    }
+  },
+  "schedule": {
+    "timezone": "Asia/Shanghai",
+    "windows": ["11:00", "15:00", "21:00"],
+    "per_window": 5
+  },
+  "transport": {
+    "kind": "huashu",
+    "bridge_port": 8899,
+    "label": "boss-hunt",
+    "chrome_app": "Google Chrome"
+  },
+  "paths": {
+    "workdir": "~/.boss-hunt/data"
+  }
+}
