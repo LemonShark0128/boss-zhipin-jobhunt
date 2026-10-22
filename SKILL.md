@@ -76,6 +76,15 @@ python3 scripts/boss_hunt.py send 1              # 首跑只发 1 个
 | inbox | `近 72 小时新消息 …`；面试类只出现「已回，请先给时段」 |
 | 收尾 | `已关自己开的标签页 N 个`；用户自己的页面没动 |
 
+**回归与验证边界**
+
+- 改筛选规则后，别只看「候选从 93 变成 289」这种数量变化：把新规则跑在历史 `raw/`
+  快照上，与旧结果做集合差，逐条看差异是不是想要的（新增的猎头/代招/经验超标过滤会
+  体现为「旧有我无」）。数量只是线索，差异清单才是证据。
+- 真实发送属于用户决策，不要用「发几个试试」验证链路：读路径（`login-check` /
+  `scan` / `plan` / `inbox` 只读）跑通 + 防重复守卫跑通（对已投岗位必须返回
+  `skip_already_chatted` 且不点按钮）就够，真发先问用户。
+
 ### 5. 交给定时任务（可选）
 
 写一个 wrapper（`~/.boss-hunt/run.sh`）：
@@ -110,7 +119,7 @@ python3 scripts/boss_hunt.py run   [--send N] [--inbox]
 | `user.years_experience` / `industry` / `highlights` | 招呼语素材 | 成绩必须带数字 |
 | `user.greeting_template` | 招呼语，支持 `{years}{industry}{highlights}{job_name}{brand}` | 80–200 字，至少 2 个占位符 |
 | `user.interview_reply` | 面试类自动回复 | 只表达愿意面 + 请对方给时段 |
-| `targets[]` | 城市 + 关键词 + 每日配额 | `city_code` 见 `boss-site-notes.md` |
+| `targets[]` | 城市 + 关键词 + 每日配额 | `city_code` 见 `docs/boss-site-notes.md` |
 | `filters.salary_min_k` | 薪资下限（K） | 先比心理价低 2K |
 | `filters.title_allow` / `title_block` | 头衔白/黑名单（正则） | 命中黑名单且不含白名单 → 拒 |
 | `filters.industry_block` / `brand_block` / `hr_block` | 行业/公司/HR 排除 | 加离职公司、竞业对手 |
@@ -142,6 +151,10 @@ python3 scripts/boss_hunt.py run   [--send N] [--inbox]
 - 没有 huashu-chrome：`docs/agent-driven-mode.md`
 
 ## 交给别人之前
+
+> 要把它真发到 GitHub 开源（README/LICENSE/仓库结构/清污/建仓推送），按 `github` 技能的
+> 「发布本地项目/技能为公开开源仓库」参考文档走；本技能的 `README.md` + `LICENSE` + `.gitignore`
+> 已经按那个流程备好，推送前把 README 里的 `<this-repo>` 换成真实地址。
 
 1. 删掉 `~/.boss-hunt/data/`（`state.json`、`raw/`、`runs.log` 全是真实岗位和沟通记录）。
 2. 确认 `config.json` 里没有真实姓名、手机号、现公司敏感信息；

@@ -48,7 +48,7 @@ boss_hunt.py
 **环境**：Chrome（保持登录 BOSS）、Node.js（提供 `npx`）、Python 3.9+。实测于 macOS + Chrome + Python 3.9.6。
 
 ```bash
-git clone <this-repo> boss-hunt && cd boss-hunt
+git clone https://github.com/LemonShark0128/boss-zhipin-jobhunt.git boss-hunt && cd boss-hunt
 python3 scripts/boss_hunt.py init          # 生成 ~/.boss-hunt/config.json
 ```
 
