@@ -9,7 +9,7 @@ description: BOSS直聘求职自动化：访谈需求→登录→筛选→打招
 > 本目录是技能本体，同时就是仓库工作副本；对外交付给链接即可。
 >
 > 这个 `SKILL.md` 不是 Hermes 专属：frontmatter 符合 Agent Skills 规范，Hermes 和
-> Claude Code 用同一个文件直接装载；Codex / Cursor 等读仓库根的 `AGENTS.md`；
+> Claude Code 用同一个文件直接装载；Codex / Cursor / 自建或厂商 harness 读仓库根的 `AGENTS.md`；
 > 各 Agent 的工具名映射见 `docs/agent-adapters.md`。
 
 把「帮用户在 BOSS 上找工作」跑成一个可交付的流程：先访谈需求，再让用户自己登录，

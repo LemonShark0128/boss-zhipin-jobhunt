@@ -12,6 +12,10 @@
   跨 Agent 迁移）
 
 ### Changed
+- `scripts/chrome_mcp.py` 的 Chrome 唤醒改为平台分支（macOS `open -a` / Linux `google-chrome`|
+  `chromium` / Windows `start chrome`），不再只有 macOS 可用；`wake_extension` 复用 `open_chrome()`
+- README 首屏补「不挑 Agent、不需要接口 key」，重写「作为 Agent 技能使用」为三层入口
+  （SKILL.md / AGENTS.md / 纯 CLI），FAQ 的跨平台说明与实现对齐
 - 跨 Agent 化：`SKILL.md` 里 Hermes 专属的 `browser_exec(local=True)` / `cronjob_manage`
   改为通用表述，Hermes 名放括号里；`docs/troubleshooting.md` 的定时排障同样通用化
 - README「作为 Hermes Agent 技能使用」→「作为 Agent 技能使用」，补 Claude Code / Codex /

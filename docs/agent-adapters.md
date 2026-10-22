@@ -16,6 +16,7 @@
 | Claude Code | `~/.claude/skills/boss-zhipin-jobhunt/SKILL.md`（个人级）或项目内 `.claude/skills/…` | 自动发现，也可 `/boss-zhipin-jobhunt` 手动调 |
 | Codex CLI | 不用装；在仓库根读 `AGENTS.md` | `AGENTS.md` 是 Codex 的默认约定，克隆到哪生效到哪 |
 | Cursor / 其他 IDE Agent | 项目根 `AGENTS.md`（本仓库已提供） | 按各家对 `AGENTS.md` 的支持度 |
+| 自建 / 厂商 harness | 读仓库根 `AGENTS.md`；只执行 shell 的也可以直接调 CLI | 两者都不需要装东西，不需要 MCP |
 | 无 Agent（人或 shell 脚本） | 直接读 `SKILL.md` 当操作手册 | 跑 `python3 scripts/boss_hunt.py` 即可 |
 
 `SKILL.md` 的 frontmatter 只有 `name` + `description`，符合 Agent Skills 规范，

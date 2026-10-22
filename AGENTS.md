@@ -1,8 +1,9 @@
 # AGENTS.md — 给任意 Agent 的入口
 
 本仓库是一个**可直接运行的 CLI 项目**（Python 3.9+，运行时零 LLM token），
-不依赖任何特定 Agent。Codex、Claude Code、Cursor、Copilot、Hermes、或者你自己开个终端，
-走的都是同一套流程。
+不依赖任何特定 Agent。Codex、Claude Code、Cursor、Copilot、Hermes、自建或厂商 harness
+（只要能读本文件、或能执行 shell），走的都是同一套流程 —— 差别只在“用哪个工具点页面”和
+“用什么挂定时”，映射见 `docs/agent-adapters.md`。
 
 ## 读文件的顺序
 

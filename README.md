@@ -15,6 +15,9 @@
 > 设计取向是「少而准」：默认每天 15–20 个、间隔 60s、跳过猎头/代招/需下载 App/验证码页，
 > 同一 HR 只发一次。它不绕过任何人机验证，也不替你答应面试时间。
 
+**不挑 Agent，也不需要接口 key**：核心是纯 CLI（零 LLM token），终端直接能跑；
+交给 Agent 时按它的约定读 `SKILL.md` 或 `AGENTS.md`，是同一套流程（见「作为 Agent 技能使用」）。
+
 ---
 
 ## 特性
@@ -24,7 +27,7 @@
 - 📬 **收件箱分类**：感兴趣 / 约面试 / 不合适；面试类只回「请先给时段，我确认后答复」，绝不自作主张
 - 🗂 **幂等记账**：`state.json` 按岗位 ID + HR 去重，跨天保留额度
 - ⏱ **零 token 运行**：纯 Python + 本地浏览器桥，可挂 cron 无人值守
-- 🧩 **两种用法**：独立 CLI，或作为 Agent 技能 —— [Hermes](https://hermes-agent.nousresearch.com/)、Claude Code 直接装载同一份 `SKILL.md`，Codex / Cursor 读 `AGENTS.md`
+- 🧩 **两种用法**：独立 CLI，或作为 Agent 技能（含访谈清单）
 - 📦 **可复制**：整个目录交给别人就能用，改配置不改代码
 
 ## 工作原理
@@ -61,7 +64,7 @@ boss_hunt.py
   打开 `chrome://extensions` → 开发者模式 → 「加载已解压的扩展程序」选中该目录
 - 验证：`npx -y huashu-chrome doctor` 应显示「Chrome 扩展在线」
 
-> 本项目不调用 `huashu-chrome install`（那是给 Claude Code / Codex 写 MCP 配置的），
+> 本项目不调用 `huashu-chrome install`（那是给支持 MCP 的 Agent —— Claude Code / Codex 等 —— 写配置的），
 > 只需要扩展 + 运行时的 `npx`。如果 `doctor` 通了但脚本仍报 `NO_EXTENSION`，
 > 见 [`docs/troubleshooting.md`](docs/troubleshooting.md)。
 
@@ -103,7 +106,8 @@ python3 scripts/boss_hunt.py init          # 生成 ~/.boss-hunt/config.json
    caffeinate -i -t 900 /usr/bin/python3 /path/to/repo/scripts/boss_hunt.py run --send 5 --inbox
    ```
    `cron: 0 11,15,21 * * *`（以 `schedule.timezone` 求值）。macOS 上必须用 `caffeinate`
-   包住，否则系统睡眠会冻住 Chrome、断开本地桥。
+   包住，否则系统睡眠会冻住 Chrome、断开本地桥；Linux / Windows 去掉 `caffeinate`，
+   改用本机等价物（如 `systemd-inhibit`）或不防止睡眠。
 
 ## 配置说明
 
@@ -193,8 +197,8 @@ python3 scripts/boss_hunt.py run   [--send N] [--inbox]
 ```text
 .
 ├── README.md                    # 面向使用者的说明（本文件）
-├── SKILL.md                     # 技能/流程说明（Agent Skills 规范，Hermes 与 Claude Code 通用）
-├── AGENTS.md                    # 非 SKILL.md Agent 的入口（Codex / Cursor / 其他）
+├── SKILL.md                     # 技能/流程说明（Agent Skills 规范；同时是完整操作手册）
+├── AGENTS.md                    # 通用 harness 入口（Codex / Cursor / 自建 harness 都先读它）
 ├── CHANGELOG.md                 # 版本变更
 ├── assets/config.example.json   # 配置模板
 ├── scripts/boss_hunt.py         # 主程序：scan / filter / send / inbox / run
@@ -211,21 +215,32 @@ python3 scripts/boss_hunt.py run   [--send N] [--inbox]
 
 ## 作为 Agent 技能使用
 
-`SKILL.md` 符合 Agent Skills 规范（`name` + `description`），一份文件给所有 Agent 用。
+**接入不挑 Agent**，三个入口任选其一，指向的是同一套流程和同一份 `config.json`：
 
-| Agent | 怎么装 |
-|--|--|
-| Hermes | `cp -r . ~/.hermes/skills/productivity/boss-zhipin-jobhunt` |
-| Claude Code | `mkdir -p ~/.claude/skills && cp -r . ~/.claude/skills/boss-zhipin-jobhunt`（也可放项目内 `.claude/skills/`） |
-| Codex CLI | 不用装：克隆到任意位置，Codex 读仓库根的 `AGENTS.md` |
-| Cursor / 其他 | 同上，读 `AGENTS.md` |
-| 不用 Agent | 直接读 `SKILL.md` 当操作手册，跑脚本即可 |
+| 你的 Agent | 入口 | 怎么接 |
+|--|--|--|
+| 遵循 Agent Skills 规范（Hermes、Claude Code…） | `SKILL.md` | 整个目录放进技能目录，按 `description` 自动触发 |
+| 读 `AGENTS.md` 的 harness（Codex CLI、Cursor、自建或厂商 harness） | `AGENTS.md` | 克隆到任意位置，不用安装、不用改配置 |
+| 只执行 shell / 自己写的小 harness | `scripts/boss_hunt.py` | 直接跑命令，输出是纯文本，自己解析 |
+
+```bash
+# Hermes
+cp -r . ~/.hermes/skills/productivity/boss-zhipin-jobhunt
+
+# Claude Code（个人级；也可放项目内 .claude/skills/）
+mkdir -p ~/.claude/skills && cp -r . ~/.claude/skills/boss-zhipin-jobhunt
+
+# Codex / Cursor / 其他 harness：什么都不用做，读仓库根的 AGENTS.md
+```
 
 装好后 Agent 会按「访谈 → 登录 → 配置 → 干跑 → 定时」带你走一遍，
 包括问你没想起来的事（通勤圈、猎头、已投公司、多方向配额、已读不回跟进）。
 
-工具名怎么对应（浏览器、定时任务）见 [`docs/agent-adapters.md`](docs/agent-adapters.md)。
-注意：**脚本模式在所有 Agent 上完全一致**，只有「代理模式」和「挂定时」两处需要换工具。
+**不需要 MCP，也不需要任何接口 key**：脚本模式是纯 CLI，只要 harness 能执行 shell 就能用。
+只有「代理模式」（不装扩展、让 Agent 自己点页面）才依赖浏览器工具，各 Agent 的对应关系见
+[`docs/agent-adapters.md`](docs/agent-adapters.md)。
+
+**跨平台**：macOS 为实测环境；Linux / Windows 的 Chrome 唤醒已内置平台分支（见 FAQ），但未实测。
 
 ## FAQ
 
@@ -238,8 +253,9 @@ python3 scripts/boss_hunt.py run   [--send N] [--inbox]
 其他城市在网页版切一次城市，URL 里的 `city=` 就是。
 
 **Windows / Linux 能用吗？**
-代码本身是纯 Python + stdio MCP，没有平台绑定；但 `chrome_mcp.py` 里唤醒扩展用的是 macOS
-的 `open -a`，`caffeinate` 也是 macOS 命令。其他平台需要把这两处换成本地等价命令（欢迎 PR）。
+代码是纯 Python + stdio MCP，没有平台绑定。Chrome 唤醒已在 `chrome_mcp.py` 里按平台分支：
+macOS `open -a`、Linux `google-chrome` / `chromium`、Windows `start chrome`（macOS 实测，
+其余平台未实测，欢迎反馈）。定时脚本里的 `caffeinate` 是 macOS 防睡眠命令，其他平台去掉或换等价物。
 
 **为什么消息页的未读数永远是 0？**
 打开消息页会把未读清零，这是页面行为。项目改用「消息时间 + 发送方是否是自己」判断新消息。

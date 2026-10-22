@@ -11,6 +11,7 @@ import json
 import re
 import socket
 import subprocess
+import sys
 import threading
 import time
 
@@ -125,16 +126,40 @@ def ensure_bridge(port=8899, wait_seconds=60):
     return "bridge_fail"
 
 
+def open_chrome(chrome="Google Chrome"):
+    """Launch Chrome without navigating anywhere (never touches the user's own tabs).
+
+    Platform-aware: macOS uses `open -a`; Linux tries the usual binary names;
+    Windows uses `start`. Returns the command it attempted, or "" if none worked.
+    Failure is non-fatal — the caller just probes the bridge again.
+    """
+    devnull = subprocess.DEVNULL
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", "-a", chrome], stdout=devnull, stderr=devnull)
+            return "open -a " + chrome
+        if sys.platform.startswith("linux"):
+            for exe in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+                try:
+                    subprocess.Popen([exe], stdout=devnull, stderr=devnull, start_new_session=True)
+                    return exe
+                except FileNotFoundError:
+                    continue
+            return ""
+        if sys.platform.startswith("win"):
+            subprocess.run(["cmd", "/c", "start", "", "chrome"], stdout=devnull, stderr=devnull, shell=False)
+            return "start chrome"
+    except Exception:
+        return ""
+    return ""
+
+
 def wake_extension(cfg, attempts=3):
     """Chrome/extension asleep: open Chrome (blank page, never the user's own URLs)."""
     chrome = (cfg.get("transport") or {}).get("chrome_app") or "Google Chrome"
     label = (cfg.get("transport") or {}).get("label") or "boss-hunt"
     for _ in range(attempts):
-        try:
-            subprocess.run(["open", "-a", chrome], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
+        open_chrome(chrome)
         time.sleep(6)
         probe = Client(label=label)
         probe.start()
