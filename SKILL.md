@@ -38,6 +38,10 @@ description: BOSS直聘求职自动化：访谈需求→登录→筛选→打招
 Chrome（已登录 BOSS）+ Python 3.9+ + Node ≥20（`npx`）+ [huashu-chrome](https://github.com/alchaincyf/huashu-chrome)
 （MIT，运行时 `npx` 拉取，不打包）**及其 Chrome 扩展**。
 
+平台：macOS 为实测环境；`chrome_mcp.py` 的 Chrome 唤醒已按平台分支（macOS `open -a` /
+Linux `google-chrome`｜`chromium` / Windows `start chrome`），非 macOS 分支未实测，
+回报时要说明是「未验证」而不是「支持」。定时脚本里的 `caffeinate` 只在 macOS 有效。
+
 扩展必须由用户手动装一次：商店
 <https://chromewebstore.google.com/detail/foiljmaplphdfimfcnfdpekhdnfbgfbf>，
 或 `npx -y huashu-chrome extension` 打印目录后在 `chrome://extensions` 加载已解压的扩展。
@@ -104,6 +108,13 @@ python3 scripts/boss_hunt.py send 1              # 首跑只发 1 个
 - 真实发送属于用户决策，不要用「发几个试试」验证链路：读路径（`login-check` /
   `scan` / `plan` / `inbox` 只读）跑通 + 防重复守卫跑通（对已投岗位必须返回
   `skip_already_chatted` 且不点按钮）就够，真发先问用户。
+- 改了代码要在**不发消息**的前提下验证：复制配置到 scratch 目录，设
+  `inbox.interview_auto_reply=false`、`inbox.followup.enabled=false`，把 `paths.workdir`
+  指到 scratch，再复制 `~/.boss-hunt/data/raw`。用 `cp -r raw/. <workdir>/raw/`（末尾 `/.`）；
+  写成 `cp -r raw <workdir>/raw` 会嵌成 `raw/raw`，`load_jobs` 读到 0 条、candidates 空，
+  看起来像过滤逻辑坏了。
+- `send` 的写入路径用替身跑：`B.send_one = lambda *a, **k: "sent"`、`B.time.sleep = lambda *a, **k: None`，
+  再调 `do_send(cfg, None, None, st, 2, out)`，检查返回结构（`sent` / `items`）与 `out` 文本行是否都符合预期。
 
 ### 5. 交给定时任务（可选）
 
@@ -135,6 +146,9 @@ python3 scripts/boss_hunt.py run   [--send N] [--inbox]
 **给 harness / 脚本调用时加 `--json`**：stdout 只有一个 JSON 对象（`schema` / `cmd` / `ok` +
 命令专用字段），人类文本仍写 `runs.log`。字段表见 README「JSON 输出」，或直接
 `python3 scripts/boss_hunt.py plan --json | jq .summary`。
+
+`ok=true` 只代表命令跑通了，**不代表招呼发出去了** —— 发送结果看 `items[].result`
+（`sent` / `skip_already_chatted` / `unverified`）。别把 `ok` 当成功回报给用户。
 
 配置文件查找顺序：`--config PATH` → `$BOSS_HUNT_CONFIG` → `~/.boss-hunt/config.json`。
 
