@@ -3,6 +3,12 @@
 按「现象 → 先查什么 → 怎么修」组织。凡是静默失败，先看报告里有没有对应行，
 再去 `~/.boss-hunt/data/runs.log` 尾部。
 
+## macOS：机器睡觉会掐掉整跳
+
+本机 `pmset sleep 1`（闲置 1 分钟就睡），靠 TokenBar 的电源断言才没睡。定时入口必须用
+`caffeinate -i -t 900` 包住脚本（wrapper 里已有），否则系统一睡 Chrome 冻结 → 桥断 → 整跳失败。
+**合盖时 caffeinate 也无效**，这点要如实告诉用户，不要提议 `sudo pmset -a sleep 0` 去改他的电源设置。
+
 ## 前置：扩展必须装过一次
 
 `NO_EXTENSION` / 桥一直连不上的最常见原因不是本项目，而是 **huashu-chrome 的 Chrome 扩展没装**。

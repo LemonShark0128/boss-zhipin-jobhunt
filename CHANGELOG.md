@@ -5,6 +5,11 @@
 
 ## [Unreleased]
 
+### Changed
+- `SKILL.md` 原「与本机旧版的关系」改为通用的「只跑一套（迁移时怎么搬）」：明确 `sent`/`contacts`/`replied`/`inbox_seen`
+  与 `day`/`day_count` 必须随迁移交接（原表述写成「不要复制 state.json」，与实际需要相反）
+- `docs/troubleshooting.md` 补 macOS 睡眠掐跳一节（`pmset sleep 1`、`caffeinate` 边界、合盖无效）
+
 ## [0.1.2] - 2026-10-22
 
 ### Added
