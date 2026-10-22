@@ -3,6 +3,18 @@
 按「现象 → 先查什么 → 怎么修」组织。凡是静默失败，先看报告里有没有对应行，
 再去 `~/.boss-hunt/data/runs.log` 尾部。
 
+## 前置：扩展必须装过一次
+
+`NO_EXTENSION` / 桥一直连不上的最常见原因不是本项目，而是 **huashu-chrome 的 Chrome 扩展没装**。
+浏览器不允许脚本代装扩展，必须用户手动点一次：
+
+1. 商店一键装：<https://chromewebstore.google.com/detail/foiljmaplphdfimfcnfdpekhdnfbgfbf>
+2. 商店打不开：`npx -y huashu-chrome extension` 打印扩展目录 → `chrome://extensions` →
+   开发者模式 → 「加载已解压的扩展程序」选该目录
+3. 验证：`npx -y huashu-chrome doctor` 显示「Chrome 扩展在线」才算好
+
+`doctor` 在线但本项目仍报错，才是本项目的问题（继续往下看）。
+
 ## 桥和扩展
 
 | 现象 | 原因 | 处理 |

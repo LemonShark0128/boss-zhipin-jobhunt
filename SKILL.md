@@ -27,6 +27,17 @@ description: BOSS直聘求职自动化：访谈需求→登录→筛选→打招
 4. 同一账号不要再跑第二套自动化（别的油猴脚本/工具），会双发同一条招呼。
 5. 收尾只关本技能自己开的标签页，绝不动用户其他页面。
 
+## 前置依赖
+
+Chrome（已登录 BOSS）+ Python 3.9+ + Node ≥20（`npx`）+ [huashu-chrome](https://github.com/alchaincyf/huashu-chrome)
+（MIT，运行时 `npx` 拉取，不打包）**及其 Chrome 扩展**。
+
+扩展必须由用户手动装一次：商店
+<https://chromewebstore.google.com/detail/foiljmaplphdfimfcnfdpekhdnfbgfbf>，
+或 `npx -y huashu-chrome extension` 打印目录后在 `chrome://extensions` 加载已解压的扩展。
+装完 `npx -y huashu-chrome doctor` 应显示「Chrome 扩展在线」。
+不要替用户装（浏览器不允许脚本代装），也不要改上游代码。
+
 ## 五步上线
 
 ### 1. 访谈（一次问完）

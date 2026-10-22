@@ -43,9 +43,31 @@ boss_hunt.py
 脚本走的是「页面导航 + 抓取页面自己发出的请求」，带签名和 cookie，行为与人工浏览一致。
 同理，打开消息页会把未读清零，所以判「有没有新消息」用的是消息时间 + 发送方，不是未读数。
 
+## 依赖与前置
+
+| 依赖 | 版本 / 说明 | 必需 |
+|--|--|--|
+| Chrome | 保持登录 BOSS | ✅ |
+| Python | 3.9+（用 `zoneinfo`） | ✅ |
+| Node.js | ≥20，提供 `npx` | ✅ |
+| [huashu-chrome](https://github.com/alchaincyf/huashu-chrome) | MIT，作者 [花叔](https://github.com/alchaincyf)；MCP server + 本地桥 | ✅ 运行时 `npx` 拉取，不打包 |
+| huashu-chrome **Chrome 扩展** | 浏览器不允许脚本代装，必须你点一次 | ✅ |
+
+装扩展只需一次：
+
+- 商店一键装：<https://chromewebstore.google.com/detail/foiljmaplphdfimfcnfdpekhdnfbgfbf>
+- 商店打不开时手动加载：`npx -y huashu-chrome extension` 会打印扩展目录，
+  打开 `chrome://extensions` → 开发者模式 → 「加载已解压的扩展程序」选中该目录
+- 验证：`npx -y huashu-chrome doctor` 应显示「Chrome 扩展在线」
+
+> 本项目不调用 `huashu-chrome install`（那是给 Claude Code / Codex 写 MCP 配置的），
+> 只需要扩展 + 运行时的 `npx`。如果 `doctor` 通了但脚本仍报 `NO_EXTENSION`，
+> 见 [`docs/troubleshooting.md`](docs/troubleshooting.md)。
+
 ## 快速开始
 
-**环境**：Chrome（保持登录 BOSS）、Node.js（提供 `npx`）、Python 3.9+。实测于 macOS + Chrome + Python 3.9.6。
+**环境**：Chrome（保持登录 BOSS）、Node.js ≥20（提供 `npx`）、Python 3.9+，外加上面的浏览器扩展。
+实测于 macOS + Chrome + Python 3.9.6 + huashu-chrome 1.3.0。
 
 ```bash
 git clone https://github.com/LemonShark0128/boss-zhipin-jobhunt.git boss-hunt && cd boss-hunt
@@ -220,6 +242,20 @@ cp -r . ~/.hermes/skills/productivity/boss-zhipin-jobhunt
   [`docs/boss-site-notes.md`](docs/boss-site-notes.md) 更新，别凭猜改。
 - 新增过滤规则请附带一个真实反例（哪种岗位被误杀/漏放），方便回归。
 - 提交前跑 `python3 scripts/boss_hunt.py --help` 和 `validate`，确保没把个人配置带进 diff。
+
+## 依赖与致谢
+
+本项目的浏览器能力几乎全部来自 **[huashu-chrome](https://github.com/alchaincyf/huashu-chrome)**
+（作者 [花叔 / alchaincyf](https://github.com/alchaincyf)，MIT）：
+
+- 它提供 MCP server、127.0.0.1 上的本地桥和 Chrome 扩展，让脚本能用用户**当前浏览器的登录态**，
+  不必传 cookie、不必重新登录；
+- 本项目**不打包、不修改**它，只在运行时 `npx -y huashu-chrome` 调用；升级由 `npx` 自动取最新版；
+- 它的扩展必须由用户手动安装一次（浏览器不允许脚本代装），步骤见上面的「依赖与前置」；
+- 遇到 `NO_EXTENSION` / 桥连不上，先跑 `npx -y huashu-chrome doctor` 分清是本项目还是上游的问题；
+- 如果你觉得上游好用，去它的仓库点个 star：<https://github.com/alchaincyf/huashu-chrome>
+
+除了 huashu-chrome，本项目没有第三方 Python 依赖，也**没有任何接口 key**。
 
 ## License
 
