@@ -6,6 +6,7 @@
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Chrome](https://img.shields.io/badge/Chrome-required-yellow.svg)](https://www.google.com/chrome/)
 [![Token](https://img.shields.io/badge/LLM%20token-0-lightgrey.svg)](#工作原理)
+[![Powered by huashu-chrome](https://img.shields.io/badge/powered%20by-huashu--chrome-cb3837?logo=npm&logoColor=white)](https://github.com/alchaincyf/huashu-chrome)
 
 基于**你自己已登录的 Chrome**，按配置筛选 BOSS 直聘（zhipin.com）上的岗位、
 用你的招呼语打招呼、盯 HR 的新消息并按类别处理。所有个人化内容都在 `config.json`，
@@ -191,10 +192,13 @@ python3 scripts/boss_hunt.py run   [--send N] [--inbox]
 
 ```text
 .
+├── README.md                    # 面向使用者的说明（本文件）
 ├── SKILL.md                     # Hermes Agent 技能说明（也可当流程文档读）
+├── CHANGELOG.md                 # 版本变更
 ├── assets/config.example.json   # 配置模板
 ├── scripts/boss_hunt.py         # 主程序：scan / filter / send / inbox / run
 ├── scripts/chrome_mcp.py        # huashu-chrome 的 stdio MCP 客户端 + 页面封装
+├── .github/ISSUE_TEMPLATE/      # 问题模板（选择器失效 / 发送失败）
 └── docs/
     ├── onboarding-interview.md  # 需求访谈清单（8 必问 + 10 个常被忘的点）
     ├── boss-site-notes.md       # 页面选择器、接口字段、城市码、桥返回格式
@@ -246,7 +250,7 @@ cp -r . ~/.hermes/skills/productivity/boss-zhipin-jobhunt
 ## 依赖与致谢
 
 本项目的浏览器能力几乎全部来自 **[huashu-chrome](https://github.com/alchaincyf/huashu-chrome)**
-（作者 [花叔 / alchaincyf](https://github.com/alchaincyf)，MIT）：
+（作者 [花叔 / alchaincyf](https://github.com/alchaincyf)，MIT，npm 包名同为 `huashu-chrome`）：
 
 - 它提供 MCP server、127.0.0.1 上的本地桥和 Chrome 扩展，让脚本能用用户**当前浏览器的登录态**，
   不必传 cookie、不必重新登录；

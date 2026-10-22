@@ -1,0 +1,74 @@
+name: 问题 / Bug
+description: 选择器失效、发送失败、扫描抓不到岗位、定时任务静默失败
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先跑一遍 `npx -y huashu-chrome doctor` 和 `python3 scripts/boss_hunt.py validate`，
+        再对照 `docs/troubleshooting.md`。**不要贴 cookie、手机号、真实 HR 姓名或完整简历内容。**
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 期望是什么、实际是什么。一条一条写，别写成一段。
+    validations:
+      required: true
+  - type: textarea
+    id: cmd
+    attributes:
+      label: 复现命令
+      description: 从哪条命令开始的（scan / plan / send / inbox / run）
+      render: bash
+      placeholder: python3 scripts/boss_hunt.py scan --pages 1
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: 输出或报错（脱敏）
+      description: 贴报告里的那几行，或 runs.log 尾部；把公司名、HR 名字、薪资以外的个人信息去掉
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: doctor
+    attributes:
+      label: huashu-chrome doctor 的结果
+      options:
+        - Chrome 扩展在线（正常）
+        - NO_EXTENSION / 扩展离线
+        - 桥连不上（bridge_fail）
+        - 没跑过 doctor
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      description: 系统 + Python + Node + huashu-chrome 版本
+      placeholder: macOS 26.6 / Python 3.9.6 / Node 26.7 / huashu-chrome 1.3.0
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: 哪一步出问题
+      multiple: true
+      options:
+        - 登录探测（login-check / preflight）
+        - 抓岗位（scan 抓到 0 页 / 解析为空）
+        - 筛选（plan 名单不对、误杀或漏放）
+        - 发招呼（skip_* / unverified / err_fill）
+        - 收件箱（新消息数不对 / 回复发不出）
+        - 定时任务（cron 没跑或没有输出）
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我看过 docs/troubleshooting.md，并跑了上面两条诊断命令
+          required: true
+        - label: 内容已脱敏（没有 cookie、密码、验证码、手机号、真实姓名）
+          required: true
