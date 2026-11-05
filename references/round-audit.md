@@ -1,0 +1,151 @@
+# 盘一盘「上一轮到底发了什么」（巡检与取证）
+
+触发：用户问「上一轮是不是发了好多招呼 / 出了什么问题」，或定时任务报错后要复盘。
+目标是用本地记录给出**条数 + 名单 + 异常**，不需要重跑投递，也不需要先动浏览器。
+
+## 1. 取证顺序（别倒着查）
+
+1. `~/.boss-hunt/data/state.json` 的 `sent` —— 唯一权威的「发出」记录，每条带
+   `ts`（配置时区）/ `name` / `brand` / `salary` / `grade` / `target` / `greet_source`。
+   按 `ts` 过滤当天，数条数，并逐条读 `name`：有没有技术岗/产品岗混进来。
+2. `state.day_count` / `day_by_target` —— 与 `sending.daily_cap` 比，确认额度有没有超、分城市分布对不对。
+3. 定时任务侧：`~/.hermes/cron/executions.db`
+   - `executions`：`status` / `started_at` / `finished_at` / `error`；`finished-started` 就是真实耗时。
+   - `cron_incidents`：`state=alerted` 且 `closed_at` 为空 = 同一故障反复发生且一直没关，要报给用户。
+4. 最后读 `runs.log`：按 `【` 切段，统计 `跳过(...)` 与回退原因（见 SKILL.md 排障一节）。
+
+**日志整段缺失 ≠ 没投。** `runs.log` 是收尾一次性写盘；进程被超时 kill 时这一段就没了，
+而 `state.sent` 早就逐条落盘。看到「今天没有分段」先看 `state.sent`，别回「今天没投」。
+
+## 2. 时区：stamp 和文件 mtime 不是同一个钟
+
+- `state.sent[].ts`、`runs.log` 分段头用的是 `config.schedule.timezone`（本机这套配置是 Asia/Shanghai）。
+- `ls -l` 的 mtime 用系统时区（这台机器是 PDT），两者**差 15 小时**。
+- 判断「配置改动在前还是发送在前」必须先把 mtime 换算到配置时区再比。直接对比会把
+  「改在发送之后」读成「改在发送之前」，从而误判某条过滤规则当时到底有没有生效。
+
+## 3. 只读巡检（不发任何消息）
+
+复制一份配置到 scratch，关掉自动回复，把 workdir 指到 scratch，再跑 inbox：
+
+```bash
+S=~/.hermes/cache/scratch/bh-check; mkdir -p $S/data
+python3 - <<'PY'
+import json, os
+c = json.load(open(os.path.expanduser("~/.boss-hunt/config.json")))
+c["paths"]["workdir"] = os.path.expanduser("~/.hermes/cache/scratch/bh-check/data")
+c.setdefault("inbox", {})["interview_auto_reply"] = False
+c["inbox"].setdefault("followup", {})["enabled"] = False
+json.dump(c, open(os.path.expanduser("~/.hermes/cache/scratch/bh-check/config.json"), "w"), ensure_ascii=False)
+PY
+cp ~/.boss-hunt/data/state.json $S/data/
+BOSS_HUNT_CONFIG=$S/config.json python3 <skill>/scripts/boss_hunt.py --json inbox
+```
+
+- 看 JSON 的 `interviews` / `replied_ok` / `reply_failed` / `tabs_closed`：
+  `interviews` 非空 = 有人在等回，要报给用户；`tabs_closed ≥ 1` = 它自己关掉了自己开的标签页，
+  用户的页面没动。
+- `--config` 必须写在子命令前，用 `BOSS_HUNT_CONFIG` 环境变量最省事（见 SKILL.md 常用命令）。
+- 这个巡检会走一遍消息页，100 条消息要几分钟；会话列表里点不开的会话（`wrong_conv` / `no_conv`）
+  会反复重试，是它慢下来和卡住的主要原因，耐心等或只取前几屏。
+
+## 4. 报数口径
+
+- `inbox` 里的「新招呼 N 条」是 HR 主动来打的招呼，**不是**我们投出去的量；我们的量是
+  `state.sent` 当天条数 + 「今日累计 N/M」。
+- 一段完整的复盘：本轮发了几条 → 今日累计/上限 → 有没有投错的（技术岗漏进来、岗位明显不对口）
+  → 有没有异常（超时被杀、`unverified`、待回面试、自动回复失败）→ 建议动作（每条一行）。
+- `no_conv` / `wrong_conv` 的面试消息回复失败会在每轮日志里反复出现；报给用户时给「需要手工回」的名单，
+  别让他以为已经回过了。
+
+## 5. 一跳被超时杀掉之后
+
+- 先确认没有残留进程：`ps -Ao pid,etime,command | grep boss_hunt`。有残留会延迟重发同一批岗位。
+- 再核额度：被杀的一跳通常只投了一部分，以 `day_count` 为真实已用量，别按 `--send N` 的 N 算。
+- 顺手查浏览器桥是否堆积：`pgrep -fl "huashu-chrome mcp"`，每个会话残留一对，堆多了标签页归属会乱。
+- 给用户的收尾选项只有三条：拆跳（send / inbox 分开跑）、提高定时任务的超时上限、清残留桥进程。
+  改动前先问，别自己动他已经定下的 schedule。
+
+## 6. 读会话正文：谁回了、回了什么
+
+`runs.log` 和 `state.json` 都**不存回复正文**（inbox 只在 `replied` / `inbox_seen` 里记 id）。
+要答「HR 到底说了什么」，只能现场抓会话列表：
+
+```bash
+python3 scripts/dump_conversations.py -o conv.json
+```
+
+- 数据源是消息页的 `friend/getG` 接口。一次导航会返回约 4 页（实测 91/100/100/100 ≈ 391 条），
+  **必须合并多页响应**才完整；之后滚动容器不会加载更多，别指望翻出全量历史。
+- ⚠️ 列表项的 `title` 是**招聘方自己的职位**（HR / 招聘主管 / HRBP / 人事经理），**不是岗位名**。
+  当成岗位名就会得出「这些公司在招 HR 岗」这种完全错的结论。岗位名按 `encryptJobId` 回查
+  `raw/` 快照，查不到再按 `brandName` 匹配同公司会话。
+- ⚠️ `lastMessageInfo` 在部分分页响应里是 `null`，`fromId` 语义不可靠（我方消息也会被判成对方）。
+  **不要用 `fromId != myuid` 判「谁说的」**。
+- 判「有没有回复」用文本比对：`greet_cache.json` 的 key 形如 `<encryptJobId>|<指纹>|<模型>`，
+  取出该岗招呼语；末条文本与招呼语开头 14 字互相包含、或 `msgTime` 与 `state.sent[].ts` 相差 ≤10 分钟
+  → 仍是我方最后一条 → **没回复**；否则说明我方招呼之后有人说过话，再用系统消息正则
+  （`附件简历.{0,20}已发送|已发送给对方|对方已同意`）把系统行排掉。
+- `state.sent` 的 key 与会话列表的 `encryptJobId` 不总对得上（岗位重上架/重加密会换 id）：
+  实测 143 条投递只有 107 条能按 id 命中，剩下必须按 `brandName` 回查，否则会把「有回复」漏算成「没回复」。
+- 报数口径：回复率的分母只取「能查到会话的投递」，查不到的那批（岗位关闭 / 会话被清）单列为「无法判断」，
+  别混进分子分母，也别因此说「没这家公司」。
+- 时间：`dump_conversations.py` 的 `msg_time` 用系统时区（本机 PDT），`state.sent[].ts` 用配置时区
+  （Asia/Shanghai），换算差 15 小时后再对照；给用户报时间一律换成上海时间。
+
+## 7. 「回复说不匹配」先核归属，再谈方向
+
+**第一步不必开浏览器：用现在的规则重判历史投递。** 拿 `state.sent` 的 jobId 回查 `data/raw/`
+（查不到按 `brandName` + 岗位名前 8 字兜底，岗位重上架会换 `encryptJobId`），对每个历史岗位跑一遍
+**当前** `judge()`，分成两组：
+
+- 「当前规则会拒」= 规则收紧之前的存量误投，逐条列名字就能回答「是不是投错了方向」
+  （实测这类能占到已投的三成，集中在售前 / 解决方案 / 客户成功）；
+- 「仍会入选」= 真正需要看会话正文、按方向算回复率的样本。
+
+这一步只读本地、不清未读、不驱动 Chrome，几十秒出结果；先有它，才知道该核哪一批。
+分母要标清：能回查上 raw 的只是子集（163 条投递里 58 条能对上），回查不到的那批只能按岗位名
+套硬排除词估，报数时说「按名字估」而不是精确值。
+
+用户看到几条「不合适 / 不匹配」就以为「我的投递方向被否了」。先分三类再看结论：
+
+| 归属 | 判据 | 含义 |
+|--|--|--|
+| 我方投递的回复 | `job_id` 在 `state.sent` 里 | 才算「这个方向被拒」的证据 |
+| HR 主动招呼后被否 | 不在 `state.sent`，会话存在 | BOSS 推荐的噪声，不是投递方向问题 |
+| 用户自己手动投的 | 不在 `state.sent`，岗位也对不上 | 问用户，别替他归因 |
+
+实测一次「4 条不匹配」里只有 1 条能对上机器人投递，另外 3 条是 HR 主动招呼后自己否掉——
+照用户的说法直接改方向会改错。
+
+**判断「投递方向有没有问题」的正确证据是分方向的回复率，不是几条拒信。** 做法：
+把 `state.sent` 的岗位按方向分组（城市/区域经理、大客户/BD、售前/解决方案、客户成功、出海·外派、
+技术产品），每组算「有回复 / 已投」，再对照岗位本身性质。例：售前 22 条里 16 条是 SaaS 厂商
+（办公协作、语音、财税、营销、工业软件等），而候选人做的是本地生活 BD——这类岗本来就聊不起来，零回复是方向的锅，
+不是话术的锅。回复集中在哪个方向，就说明履历在哪个方向能对话。
+
+## 8. 拒绝采集与每日复盘
+
+用户要的不是「今天被拒了几条」，而是**能不能判断投放准不准**。所以每条拒绝都要落三个字段：
+归属、原因、方向；只报个数没有分析价值。
+
+- **只认明确拒绝**：`不合适 / 不匹配 / 不符合 / 已招满 / 已招到 / 有更合适的人选 / 暂不考虑`。
+  含糊说法（`再看看 / 有消息联系你 / 保持联系`）不算拒绝，别记，否则拒绝率全是噪声。
+- **归属按第 7 节三分**：`our_apply`（job_id ∈ `state.sent`）、`hr_initiated`、`unknown`。
+  只有 `our_apply` 进「投放精准度」的分子分母；另外两类单列。
+- **原因分类决定结论方向**，别把「不合适」当同一种：
+
+| 对方怎么说 | 说明什么 | 该动什么 |
+|--|--|--|
+| 不写原因（不好意思 / 不太合适 / 有更合适人选） | 看简历第一眼就否，最接近投放不精准 | 收窄关键词、提 `min_score` |
+| 经验 / 年限 / 资历 | 岗位级别与履历错位 | 调 `filters.experience` 上下界 |
+| 行业 / 跨行 | 主要是 B 类跨行岗的失败 | 收 B 额度，或改跨行开场白 |
+| 学历 / 证书 | 硬门槛 | 补 `degree_max` |
+| 薪资 / 预算 | 期望与预算错位 | 调 `salary_min_k` |
+| 已招满 / 岗位关闭 | 与投放无关 | 缩短 scan → send 间隔，统计时单列 |
+
+- **日报口径**（当天最后一跳，有新增才推）：当天新增 + 累计 + 原因分布，不加长名单、
+  不加分方向拒绝率（那要等样本量）。空输出 = 不推送。
+- **历史不补**：`runs.log` 与 `state.json` 都不存回复正文，会话列表只留最近约 400 条；
+  从采集器上线那天开始累计，别承诺「把以前的也算出来」。
+- 分析期至少两周：先收集不调策略，再按「分方向拒绝率」下结论。

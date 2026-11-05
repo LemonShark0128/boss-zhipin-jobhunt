@@ -57,6 +57,8 @@ class Client:
                         del self.lines[i]
                     except IndexError:
                         pass
+                    if "error" in obj:
+                        raise RuntimeError("JSON-RPC error: %s" % json.dumps(obj["error"], ensure_ascii=False))
                     res = obj.get("result", {}) or {}
                     texts, imgs = [], []
                     for part in res.get("content", []) or []:
@@ -178,12 +180,16 @@ class Browser:
         self.label = (cfg.get("transport") or {}).get("label") or "boss-hunt"
         self.opened = []
 
-    def connect(self):
+    def connect(self, fast=False):
         port = (self.cfg.get("transport") or {}).get("bridge_port") or 8899
-        self.bridge = ensure_bridge(port)
+        if fast and not port_up(port):
+            raise RuntimeError("bridge_offline")
+        self.bridge = "bridge_ok" if fast else ensure_bridge(port)
         self.c = Client(label=self.label)
         self.c.start()
-        listing = self.c.call("tabs", {"action": "list"}, timeout=40)
+        listing = self.c.call("tabs", {"action": "list"}, timeout=10 if fast else 40)
+        if fast and (listing.get("isError") or "NO_EXTENSION" in (listing.get("text") or "")):
+            raise RuntimeError("extension_offline")
         if "NO_EXTENSION" in (listing.get("text") or ""):
             self.wake = wake_extension(self.cfg)
             self.c.close()
@@ -232,16 +238,34 @@ class Browser:
                                       "wait": wait}, timeout=200)
 
     def close_own_tabs(self):
-        """Only tabs this process opened; never the user's pages."""
-        closed = 0
+        """Only our tabs; return actual closes, excluding already-missing tabs."""
+        closed, already_gone, failed = 0, 0, []
         for tid in sorted(set(self.opened)):
             try:
-                self.c.call("tabs", {"action": "close", "tabId": tid}, timeout=30)
-                closed += 1
+                result = self.c.call("tabs", {"action": "close", "tabId": tid}, timeout=30)
+                if result.get('isError'):
+                    text = result.get('text') or ''
+                    if text.startswith('[NO_TAB]') or re.search(r'标签页\s*\d+\s*不存在', text):
+                        already_gone += 1
+                    else:
+                        failed.append(tid)
+                else:
+                    closed += 1
             except Exception:
-                pass
-        self.opened = []
+                failed.append(tid)
+        self.opened = failed
+        if failed:
+            raise RuntimeError('tab_cleanup_failed: closed=%d pending=%s' % (closed, failed))
         return closed
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            self.close_own_tabs()
+        finally:
+            self.close()
 
     def close(self):
         try:
@@ -283,6 +307,19 @@ def parse_json_payload(text, default=None):
         return json.loads(t)
     except Exception:
         pass
+    # Only a decoded JSON string may fall back to text; raw garbage still
+    # follows the existing object/array recovery path below.
+    raw = (text or '').strip()
+    match = PAGE_RE.search(raw)
+    if match:
+        raw = match.group(1).strip()
+    if raw.startswith('"'):
+        try:
+            value, _end = json.JSONDecoder().raw_decode(raw)
+            if isinstance(value, str):
+                return t
+        except ValueError:
+            pass
     # 容忍前后夹带的提示文字：取出现位置最靠前的 JSON 起始符
     cands = []
     for opener, closer in (("{", "}"), ("[", "]")):

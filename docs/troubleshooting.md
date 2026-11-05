@@ -55,6 +55,23 @@
 
 `unverified` 也要在 UI 里复核：宁可少发一个，别让用户收到两条重复招呼。
 
+## 招呼语（llm 模式）
+
+`send` 的结果行会带 `招呼语:llm N 字` / `招呼语:template_fallback N 字`，先看这个再往下查。
+
+- `template_fallback` + `llm_unreachable`：Ollama 没起。`curl -s http://127.0.0.1:11434/api/tags`
+  为空就是它。直连启动（别注入 `HTTPS_PROXY`），起好后 `preflight` 会显示 `ok:<模型>`。
+- `llm_empty(length)`：模型把 `num_predict` 全花在 thinking 上了 → `user.greeting.llm.think`
+  必须 `false`。
+- `numbers_not_in_facts:...`：模型写了一个 facts/JD 里没有的数字。多数是 `greeting.facts`
+  漏了这条成绩，把原始数字补进去比调 temperature 有用。
+- `no_job_or_brand`：岗位名是「小象超市（上海新站）」「放下面子摆摊2W起」这类怪名，模型
+  不肯点名。这类岗位一般也该被 `filters` 挡掉；偶尔出现不用管，会回退模板。
+- 话术不更新：缓存命中。`greet --job-id <id> --no-cache` 复现；改过 prompt 记得把
+  `greet.PROMPT_VERSION` 加 1，否则老缓存永远优先。
+- 每条都被判 `unverified`：`verify_marker()` 必须传实际发出去的文本（llm 模式下忽略
+  `sending.verify_text`），检查你的调用点有没有漏传。
+
 ## 定时任务静默失败
 
 - 纯脚本任务（`no_agent`）崩了不会有任何聊天消息。Hermes 用

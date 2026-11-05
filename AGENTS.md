@@ -36,7 +36,8 @@ Claude Code（`~/.claude/skills/<name>/`）和 Hermes（`~/.hermes/skills/<categ
 python3 scripts/boss_hunt.py login-check     # 只读，确认登录态
 python3 scripts/boss_hunt.py init            # 生成 ~/.boss-hunt/config.json
 python3 scripts/boss_hunt.py validate
-python3 scripts/boss_hunt.py template        # 招呼语渲染 + 字数
+python3 scripts/boss_hunt.py template        # 模板招呼语渲染 + 字数
+python3 scripts/boss_hunt.py greet --job-id <id>   # 按该岗位 JD 现写的招呼语（greeting.mode=llm）
 python3 scripts/boss_hunt.py plan --top 15   # 只报告，不发
 python3 scripts/boss_hunt.py send 1          # 首跑只发 1 个
 python3 scripts/boss_hunt.py inbox           # 盯消息
@@ -53,7 +54,7 @@ python3 scripts/boss_hunt.py inbox --json            # .interviews[] / .interest
 python3 scripts/boss_hunt.py validate --json         # 有错 exit=1
 ```
 
-`schema`（当前 1）随结构变化升级；`ok=true` 只代表命令执行成功，**不代表真的发出去了** ——
+`schema`（当前 2）随结构变化升级；`ok=true` 只代表命令执行成功，**不代表真的发出去了** ——
 发送结果看 `items[].result`。字段表见 README「JSON 输出」。
 
 脚本模式需要 huashu-chrome 扩展（用户手动装一次）。装不了或用户不愿意装，
@@ -73,3 +74,16 @@ python3 scripts/boss_hunt.py validate --json         # 有错 exit=1
 - 不要提高默认节奏（15–20/天、≥60s 间隔）来「验证效果」。
 - 不要改上游 huashu-chrome 的代码，也不要替用户装浏览器扩展（浏览器不允许脚本代装）。
 - 不要碰 `~/.boss-hunt/data/` 里的真实沟通记录往外发。
+
+## Phase A 命令映射（Hermes / Claude Code / Codex 通用）
+
+| 目的 | 统一 CLI | 成功标志 |
+|--|--|--|
+| 离线 JD 判级 | `grade --jd-file jd.txt --job-name 职位` | grade / reason / scores / final 可解释 |
+| 离线粗标统计 | `grades --top 20 --json` | counts / applied 与 raw 对应 |
+| 单入口定时 | `tick --dry-run`，确认后使用 `tick --json` | actions 对应时区窗口；失败不扣未用额度 |
+| 拒绝复盘 | `rejects --days 30 --json` | kind / attribution / reason / grade / target 分组 |
+| 当天总结 | `summary --json` | sent / by_grade / rejects / no_reply / pending；activity 判空 |
+
+参数 `--config` 放子命令前。tick 自持 data/.lock，外层不要重复持锁；不抢遗留锁。
+Phase A 自测只用临时配置与替身，不读写真实运行目录，不发送、不提交或推送。

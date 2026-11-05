@@ -23,7 +23,7 @@
 ## 特性
 
 - 🔍 **多维筛选**：薪资下限、经验区间、学历、行业黑名单、公司/HR 黑名单、通勤区域、猎头/代招
-- 💬 **个性化招呼语**：`{years}` `{industry}` `{highlights}` `{job_name}` 占位符渲染，发送后回读页面确认真的发出去了
+- 💬 **按岗位现写的招呼语**：读详情页 JD 正文，用本地 Ollama + 你的事实清单现写一条点名岗位、只挑对口战绩的话术（带数字溯源闸门，不过就回退模板）；也支持老的占位符模板模式。发送后回读页面确认真的发出去了
 - 📬 **收件箱分类**：感兴趣 / 约面试 / 不合适；面试类只回「请先给时段，我确认后答复」，绝不自作主张
 - 🗂 **幂等记账**：`state.json` 按岗位 ID + HR 去重，跨天保留额度
 - ⏱ **零 token 运行**：纯 Python + 本地浏览器桥，可挂 cron 无人值守
@@ -40,7 +40,7 @@
 boss_hunt.py
   ├─ scan   导航 /web/geek/jobs?query=…&city=… → 读页面自己发出的 joblist 响应
   ├─ filter 逐条判：薪资/经验/学历/行业/公司/HR/区域/猎头/代招 → 打分排序
-  ├─ send   详情页 → 点「立即沟通」→ 填模板 → 发送 → 回读弹窗确认
+  ├─ send   详情页 →（llm 模式：读 JD → 本地模型现写招呼语 → 数字溯源闸门）→ 点「立即沟通」→ 填写 → 发送 → 回读弹窗确认
   └─ inbox  /web/geek/chat → 读 friend/getG → 分类 → 面试类代回固定话术
 ```
 
@@ -57,6 +57,7 @@ boss_hunt.py
 | Node.js | ≥20，提供 `npx` | ✅ |
 | [huashu-chrome](https://github.com/alchaincyf/huashu-chrome) | MIT，作者 [花叔](https://github.com/alchaincyf)；MCP server + 本地桥 | ✅ 运行时 `npx` 拉取，不打包 |
 | huashu-chrome **Chrome 扩展** | 浏览器不允许脚本代装，必须你点一次 | ✅ |
+| 本地 Ollama + 中文小模型 | `greeting.mode=llm` 时用；默认 `qwen3.5:9b`，直连启动别注入 `HTTPS_PROXY` | 可选 |
 
 装扩展只需一次：
 
@@ -86,7 +87,8 @@ python3 scripts/boss_hunt.py init          # 生成 ~/.boss-hunt/config.json
 2. **改配置**：编辑 `~/.boss-hunt/config.json` 的 `user` / `targets` / `filters`（字段见下）。
    ```bash
    python3 scripts/boss_hunt.py validate      # 离线校验
-   python3 scripts/boss_hunt.py template      # 预览招呼语、字数、发送校验文本
+   python3 scripts/boss_hunt.py template      # 预览模板招呼语、字数、发送校验文本
+   python3 scripts/boss_hunt.py greet --job-id <encryptJobId> --times 2   # 预览该岗位现写的招呼语
    ```
 3. **体检 + 干跑**（**先别发**）：
    ```bash
@@ -104,9 +106,9 @@ python3 scripts/boss_hunt.py init          # 生成 ~/.boss-hunt/config.json
    # ~/.boss-hunt/run.sh
    #!/bin/bash
    cd ~/.boss-hunt
-   caffeinate -i -t 900 /usr/bin/python3 /path/to/repo/scripts/boss_hunt.py run --send 5 --inbox
+   caffeinate -i /usr/bin/python3 /path/to/repo/scripts/boss_hunt.py tick
    ```
-   `cron: 0 11,15,21 * * *`（以 `schedule.timezone` 求值）。macOS 上必须用 `caffeinate`
+   `cron: */10 * * * *`（tick 以 `schedule.timezone` 求值）。macOS 上必须用 `caffeinate`
    包住，否则系统睡眠会冻住 Chrome、断开本地桥；Linux / Windows 去掉 `caffeinate`，
    改用本机等价物（如 `systemd-inhibit`）或不防止睡眠。
 
@@ -124,7 +126,7 @@ python3 scripts/boss_hunt.py init          # 生成 ~/.boss-hunt/config.json
     "interview_reply": "您好，方便安排线上面试吗？我这边时间需要先确认，您先给几个时段，我确认后再回复您。"
   },
   "targets": [
-    { "name": "主方向-上海", "city": "上海", "city_code": "101020100",
+    { "name": "主方向", "city": "示例城市", "city_code": "101020100",
       "keywords": ["商务拓展经理", "BD经理"], "daily_share": 10 }
   ],
   "filters": {
@@ -143,7 +145,10 @@ python3 scripts/boss_hunt.py init          # 生成 ~/.boss-hunt/config.json
 
 | 字段 | 作用 |
 |--|--|
-| `user.greeting_template` | 招呼语；至少 2 个占位符，否则不同岗位话术一样、像群发（80–200 字最佳，>380 会被拦） |
+| `user.greeting.mode` | `llm` = 每个岗位按 JD 现写；`template` = 渲染 `greeting_template`（默认，兼容旧配置） |
+| `user.greeting.facts` | llm 模式下唯一可引用的事实清单：逐条写清「哪段经历 + 数字」，模型编不出事实外的数字 |
+| `user.greeting.length` / `llm` | 字数闸门（建议 100–200）与本地模型参数（`think` 必须 `false`，否则思考模型只吐 thinking、正文为空） |
+| `user.greeting_template` | 模板模式的话术，也是 llm 模式失败时的回退；≥2 个占位符（80–200 字最佳，>380 会被拦） |
 | `user.interview_reply` | 面试类固定回复：只表达愿意面 + 请对方给时段 |
 | `targets[].city_code` | BOSS 数字城市码，已核对的城市见 [`docs/boss-site-notes.md`](docs/boss-site-notes.md) |
 | `targets[].daily_share` | 每个方向的每日配额，防止额度全被高分方向吃掉 |
@@ -152,11 +157,76 @@ python3 scripts/boss_hunt.py init          # 生成 ~/.boss-hunt/config.json
 | `filters.districts_allow` | 通勤圈；留空 = 不限 |
 | `sending.daily_cap` / `min_gap_seconds` | 每日上限 / 发送间隔；建议 15–20 与 ≥60s |
 | `inbox.followup` | 已读不回 48h 补一句，默认关闭 |
+| `inbox.auto_reply.use_llm` | 布尔，默认 `false`；设为 `true` 后，通过原有回复闸门且无人工要点时尝试 LLM，失败回退原意图模板；有人工要点的路径不变 |
+
+## A/B 分级是怎么判的
+
+列表没有 JD 正文，先按 `grading.roles` 筛职能，再参考行业/公司弱信号标 `A?` / `B?`；
+职能不对口标 C。发送前读 JD，按每个 track 的 `jd_signals` 命中条数定最终 A/B，
+平分或无命中用 `unknown_side`（默认 B）。C 和缺 JD 不发送，分数只决定同档顺序。
+词表支持正则；`side` 和 `label` 是解释性元数据，不触发隐藏规则。
+
+老配置缺少 `grading` 时保留 `scoring.a_min` 定级，缺 `grade_quota` 保留总日上限，不强制新增字段。
+新配置 `grade_quota={"A":22,"B":8}` 是固定日配额，`send N` 的 N 只是总数上限。
+每跳按 `ceil(各级剩余额度 / 剩余窗口数)` 分配，受 `sending.max_per_window` 限制；
+为避免末跳突发，该字段也限制本跳总发送数。跳过或失败不扣额度，不跨天累积。
+`carry_over=false` 使用 `schedule.per_window` 固定总数，仍受各级日配额约束。
+B 本跳额度满时进入 `state.b_pool`，后续 B 阶段先取旧池；A 阶段优先。
+
+判级缓存保存 JD、哈希及规则/列表字段指纹。同一快照重复运行不再读取 JD；规则、列表字段或快照文件更新时间变化后重读，
+新 JD 哈希变化即重判。无法免请求检测网站远端 JD 的静默修改，调参后建议先重新 scan。
+
+## 换行业怎么改
+
+只改 `grading` + `filters` + `targets`，不改代码：替换职能词、各侧行业/公司与 JD 信号，
+再配置硬排除、搜索城市和关键词。示例中的「示例行业A/B」「示例城市」都是占位符，
+`100000000` 也要换为目标城市的真实代码。A/B 词表与个人经历独立，切勿照搬示例业绩。
+可增加第三、第四个 track；C 始终不发送，其余新增 track 只有显式设置同名日配额才可发送。
+
+```bash
+python3 scripts/boss_hunt.py grade --jd-file jd.txt --job-name '城市经理' --industry '示例行业A'
+python3 scripts/boss_hunt.py grades --top 20 --json
+python3 scripts/boss_hunt.py tick --dry-run
+python3 scripts/boss_hunt.py rejects --days 30 --json
+python3 scripts/boss_hunt.py summary --json
+```
+
+`grade` 默认岗位名取配置的第一个 role；调试真实岗位请显式传 `--job-name`。
+`grades` 统计全部 raw 快照（包括被其它过滤器挡住的岗位），已投数按 job_id 对应。
+
+## 单入口排班与拒绝复盘
+
+cron 每 10 分钟调用 `tick`，由 `schedule.timezone` 和 `windows` 判窗口（同日 ±10 分钟）：
+`scan_windows` 扫描后投递，`inbox_windows` 只处理收件箱，其他窗口只投递，
+`summary_window` 额外总结；只有总结的窗口只出总结。各专用窗口须列入 `windows`。
+同日同窗口成功后不会重复执行；失败保留未用额度，后跳重新摊分。
+
+`tick` 与现有 wrapper 共用 `data/.lock`。外层 wrapper 不要再持同一把锁调用 tick，
+否则内层会跳过；遗留锁保守跳过，不自动抢锁。tick 要求本地桥/扩展已在线，
+不可连接时快速退出，不在定时跳中循环唤醒。40 分钟后停止业务，留时间清理自身标签；
+Unix 使用 alarm，其他平台在业务循环检查预算，不能保证正在阻塞的调用立即停止。
+
+`data/rejects.json` 保存明确拒绝和满 72h 的无回复。含糊说法不计；会话缺失、末条为空或
+公司匹配有歧义不算无回复。归属只按已发记录/可见会话判断，不以 `fromId` 判消息方。
+同岗位幂等，no_reply 可升级 explicit 并保留首次 detected_ts；explicit_ts 表示升级日期。
+`inbox.reject_reasons` 可覆盖原因正则映射；方向统计用投递时的 target。
+
+`summary` 完全离线，输出当天投递、当天新增拒绝/无回复、累计与待确认面试。
+待确认面试来自最近 inbox 的本地 pending，成功回复或明确拒绝会清除；未再次同步前可能陈旧。
+无新增活动且无待确认时 `activity=false`，文字「今天没有活动」；cron 依据 JSON 的 activity 判空。
+有待确认时仍显示，以免遗漏。脚本不推微信，外部调度器自行消费 JSON。
+
+| 新配置 | 含义 |
+|--|--|
+| `grading.*` | 职能词、tracks 的词表与未知归属处理 |
+| `sending.grade_quota` / `carry_over` / `max_per_window` | 日配额、失败顺延、每跳上限 |
+| `schedule.*_windows` / `summary_window` / `scan_pages` | 扫描/收件箱/总结窗口与扫描页数 |
 
 ## 命令行
 
 ```bash
 python3 scripts/boss_hunt.py init|validate|template|login-check|preflight
+python3 scripts/boss_hunt.py greet --job-id <id> [--times 2] [--no-cache]   # 离线预览现写的招呼语
 python3 scripts/boss_hunt.py scan  [--target 名称] [--keyword 词] [--pages 3]
 python3 scripts/boss_hunt.py plan  [--top 20]     # 干跑：只报告
 python3 scripts/boss_hunt.py send  N              # 真发
@@ -193,7 +263,7 @@ python3 scripts/boss_hunt.py inbox --json | jq '.interviews'
 python3 scripts/boss_hunt.py validate --json   # 有错时 exit=1
 ```
 
-固定字段：`schema`（当前 1）、`cmd`、`ok`。常用结构：
+固定字段：`schema`（当前 2）、`cmd`、`ok`。常用结构：
 
 | 命令 | 关键字段 |
 |--|--|
@@ -205,6 +275,11 @@ python3 scripts/boss_hunt.py validate --json   # 有错时 exit=1
 | `login-check --json` | `logged`、`bridge`、`extension`、`url` |
 | `preflight --json` | `logged`、`greeting_switch`、`day_count`、`daily_cap` |
 | `template --json` | `text`、`chars`、`marker`、`recommended_chars`、`hard_max` |
+| `grade --json` | `grade`、`reason`、`scores`、`final` |
+| `grades --json` | `counts`、`applied`、`total`、`items[]` |
+| `tick --json` | `actions`、`window`、`dry_run`（干跑）、`send` / `inbox` / `summary`（执行时） |
+| `rejects --json` | `total`、`by_kind` / `by_attribution` / `by_reason` / `by_grade` / `by_target` |
+| `summary --json` | `sent`、`by_grade`、`rejects`、`no_reply`、`reason_breakdown`、`pending`、`activity` |
 | `run --json` | `scan`、`candidates`、`send`、`inbox`、`tabs_closed` |
 
 约定：`ok` 只表示「这条命令该做的事做成了」，**不等于「发出去了」**；发送结果看
@@ -232,6 +307,7 @@ CHANGELOG 注明。
 ├── CHANGELOG.md                 # 版本变更
 ├── assets/config.example.json   # 配置模板
 ├── scripts/boss_hunt.py         # 主程序：scan / filter / send / inbox / run
+├── scripts/greet.py             # 按岗位 JD 现写招呼语：prompt / 闸门 / 缓存 / 回退
 ├── scripts/chrome_mcp.py        # huashu-chrome 的 stdio MCP 客户端 + 页面封装
 ├── .github/ISSUE_TEMPLATE/      # 问题模板（选择器失效 / 发送失败）
 └── docs/
@@ -289,6 +365,17 @@ macOS `open -a`、Linux `google-chrome` / `chromium`、Windows `start chrome`（
 
 **为什么消息页的未读数永远是 0？**
 打开消息页会把未读清零，这是页面行为。项目改用「消息时间 + 发送方是否是自己」判断新消息。
+
+**招呼语会不会每个岗位都一样？**
+`user.greeting.mode=llm` 时不会：发送前读详情页 JD，用本地模型 + 你的 `greeting.facts`
+现写一条。三道护栏——① 数字必须能在 facts/JD 里找到（编不出业绩）；② 字数/纯文本/点名岗位
+不过闸门就带反馈重试一次；③ 仍不过或模型没起，回退 `greeting_template`，绝不发空话。
+生成结果按岗位缓存，同一个岗位重跑不会换词。`mode=template` 则回到「一套话术打天下」的老行为。
+
+**本地模型要多大？**
+实测 `qwen3.5:9b`（MLX，约 32 tok/s）单条 3–9 秒、`num_predict≈360` 够用。
+**`think` 必须设成 `false`**：思考模型默认先写一大段 thinking，`num_predict` 一到就被截断，
+返回的正文是空字符串（表现为 `llm_empty(length)`）。
 
 **能不能全自动聊到拿 offer？**
 不能，也不打算做。招呼和面试安排是模板化的，其余只报告给你；任何可能承诺时间、薪资、
