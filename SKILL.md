@@ -55,8 +55,8 @@ Linux `google-chrome`｜`chromium` / Windows `start chrome`），非 macOS 分�
 
 ## 一图看全流程（用户问「这技能怎么运作」时先给图）
 
-用户要调整这个技能时，第一句常是「先给我个流程图」。已备好的图：
-`~/.hermes/artifacts/boss-hunt-flow.html`（单页 HTML，用 `::preview{file="…"}` 单独一行交付）。
+用户要调整这个技能时，第一句常是「先给我个流程图」。建议在你的 Agent 产物目录备一张单页 HTML
+流程图（如 `<agent 产物目录>/boss-hunt-flow.html`），被问到时直接交付。
 改完代码就同步这张图，别让它停在旧分支上。
 
 画图口径：**按代码真实顺序画，不按本文件的散文顺序画**——散文里 `title_block` 与 `title_hard_block`
@@ -105,7 +105,7 @@ python3 scripts/boss_hunt.py init            # 生成 ~/.boss-hunt/config.json
 python3 scripts/boss_hunt.py validate        # 离线校验，有 ❌ 必须改
 python3 scripts/boss_hunt.py template        # 预览模板招呼语 + 字数 + 校验标记
 python3 scripts/boss_hunt.py greet --job-id <encryptJobId>   # 预览该岗位现写的招呼语
-python3 scripts/boss_hunt.py greet --job-name 'KA经理' --brand '美团' --jd-file jd.txt --times 2
+python3 scripts/boss_hunt.py greet --job-name 'KA经理' --brand '示例公司' --jd-file jd.txt --times 2
 ```
 
 `template` 输出的字数要 80–200 字；>380 会被拦。校验标记（招呼语开头 8 个字）
@@ -137,7 +137,8 @@ python3 scripts/boss_hunt.py send 2              # 首跑验证链路用 2：sen
 | scan | `抓取 N 页响应`，N≥1；`库内岗位 M` 与预期同量级 |
 | plan | 前几条是用户真想要的方向；不合理就调 `title_allow`/`industry_block` |
 | send | 有 `A/B 已发｜岗位｜公司｜薪资｜招呼语:llm N 字` 行，且 `今日累计 1/N`；需复核时另看消息页左侧会话列表是否新出现该公司条目（时间戳应对得上，见 `references/login-and-verification-pitfalls.md` 第 9 条） |
-| inbox | `近 72 小时新消息 …`；面试类只出现「线上 + 约时段」的话术，不出现答应线下到场 |
+| inbox | `近 72 小时新消息 …（列表 N）`；只读，不点不发、不新增发送流水 |
+| chat | 面试类只出现「线上 + 约时段」的话术，不出现答应线下到场 |
 | grade / grades | JD 样本等级与信号可解释；粗标统计与 raw 一致，全程离线 |
 | tick --dry-run | 窗口动作正确，不开浏览器、不发送、不记账 |
 | rejects | kind / attribution / reason / grade / target 分组与样本一致 |
@@ -159,9 +160,8 @@ python3 scripts/boss_hunt.py send 2              # 首跑验证链路用 2：sen
 - 真实发送属于用户决策，不要用「发几个试试」验证链路：读路径（`login-check` /
   `scan` / `plan` / `inbox` 只读）跑通 + 防重复守卫跑通（对已投岗位必须返回
   `skip_already_chatted` 且不点按钮）就够，真发先问用户。
-- 改了代码要在**不发消息**的前提下验证：复制配置到 scratch 目录，设
-  `inbox.interview_auto_reply=false`、`inbox.followup.enabled=false`，把 `paths.workdir`
-  指到 scratch，再复制 `~/.boss-hunt/data/raw`。用 `cp -r raw/. <workdir>/raw/`（末尾 `/.`）；
+- 改了代码要在**不发消息**的前提下验证：复制配置到 scratch 目录（`inbox` 现在只读、不发消息；
+  别跑 `send` / `tick` / `chat`），把 `paths.workdir` 指到 scratch，再复制 `~/.boss-hunt/data/raw`。用 `cp -r raw/. <workdir>/raw/`（末尾 `/.`）；
   写成 `cp -r raw <workdir>/raw` 会嵌成 `raw/raw`，`load_jobs` 读到 0 条、candidates 空，
   看起来像过滤逻辑坏了。
 - `send` 的写入路径用替身跑：`B.send_one = lambda *a, **k: "sent"`、`B.time.sleep = lambda *a, **k: None`，
@@ -180,7 +180,7 @@ python3 scripts/boss_hunt.py send 2              # 首跑验证链路用 2：sen
 新配置推荐单入口 `tick`，由脚本按配置时区分派动作，先用 `tick --dry-run` 校准：
 
 ```bash
-# wrapper 用 flock 文件锁（`~/.hermes/scripts/boss-hunt-lockrun.py`），不要自己 mkdir data/.lock：
+# wrapper 用 flock 文件锁（写法见仓库 `scripts/cron/boss-hunt-chat.sh`），不要自己 mkdir data/.lock：
 # 那会把 python 的 flock 文件改成目录，每跳窗口内 tick 全灭（2026-10-28 实测）。
 # 播报由 `boss-hunt-tick-fmt.py` / `boss-hunt-inbox-fmt.py` 渲染，格式坏了不会吞掉业务退出码。
 #!/bin/bash
@@ -212,12 +212,12 @@ caffeinate -i /usr/bin/python3 <skill>/scripts/boss_hunt.py tick --json
 `⏰ HH:MM 跳被吞了（晚 N 分钟…）`。补跑会真发，所以开关默认关，要用户点头再打开。
 
 **三类「本来能回却被判需人工」的误拦（2026-11-01 真机取证，改闸门口径就看这条）**：一条真实招呼
-「你好，看了你的简历，方便聊聊吗？我们主要做本地生活线下广告置换投放的，周末双休，不加班」被连拦三次，
+「你好，看了你的简历，方便聊聊吗？我们主要做虚构品牌线下广告置换投放的，周末双休，不加班」被连拦三次，
 每一层都在不同文件，只改一层仍然发不出去：
 
 1. `conv_rules.PATTERNS['manual']` 里的裸 `置换` 命中了业务描述「广告置换投放」。改成 `置换.{0,4}(?:资源|客户|名单|货物|押金|费用)`，
    「需要自备客户资源置换」仍拦。同理「前置收费|自备|垫资|押金|加盟费」要保持强语境。
-2. `reply._HUMAN_PAT` 里的 `双休|加班` 把福利描述「周末双休，不加班」当成排班条件。删掉 `双休`、`加班` 改 `(?<!不)加班`；
+2. （历史：`reply.py` 已随 cleanup-02 移除，此条仅作口径参考）`reply._HUMAN_PAT` 里的 `双休|加班` 把福利描述「周末双休，不加班」当成排班条件。删掉 `双休`、`加班` 改 `(?<!不)加班`；
    `单休|大小周|夜班|倒班` 继续拦。
 3. **BOSS 的「你与该职位竞争者PK情况」提示气泡在真机上带 `message-item item-friend` class，和 HR 真人消息同 class**，
    而且排在 HR 那句之后 —— `reply.generate()` 取 `history[-1]` 就拿到了系统文案，整条判「其他」。
@@ -226,8 +226,11 @@ caffeinate -i /usr/bin/python3 <skill>/scripts/boss_hunt.py tick --json
    **不要改成前缀匹配**：`test_system_texts_exact_match_and_config_override` 守的就是「系统文案 + 真人指令
    （『你与该职位竞争者PK情况，请发简历』）」必须留给真人流程。
 
-验收判据：`reply_eval.py` 32/32 且**误自动 0**；`python3 -m unittest discover -s tests` 全绿（`tests/test_system_patterns.py`
+当时的验收判据（旧链路，已移除）：`reply_eval.py` 32/32 且**误自动 0**；`python3 -m unittest discover -s tests` 全绿（`tests/test_system_patterns.py`
 守着上面第 3 条）；真机 `inbox` 输出出现 `💬 回 [<HR>] → …` 且需人工数减一、`send_ledger.jsonl` 末尾 `status=sent`。
+
+> 下面到「成功分支只做 …」为止，记录的是旧 inbox 自动回话链路（`reply.py` / `human.py` / `reply-to`）已于 2026-11-06 cleanup-02 移除之前的旧实现，保留作教训；
+> 现行回 HR、发简历都走对话模块（`conversation.py` / `conv_actions.send_resume`）。
 
 **系统气泡还留了一个洞**：LLM 回出「我整理一下发您」时 `state.resume_followups` 没登记（承诺落空没人去发），
 查承诺要同时看 ledger 文案与 `resume_followups` 条数，别只看「发出去了」。
@@ -256,7 +259,12 @@ caffeinate -i /usr/bin/python3 <skill>/scripts/boss_hunt.py tick --json
   补一条会撞 `hunt_state.remember_reply` 的 `missing_confirmed_reply_event` 直接抛异常，整次 inbox 只吐一行报错、
   别的会话全不处理。成功分支只做 `used += 1` + `save_state` + 播报。
 
-**自动回话不再静默（2026-10-29）**：`inbox()` 的自动回话循环原来有三个静默 `continue`
+**仓库外的定时 wrapper 别各拷一份播报脚本**：定时入口放在仓库外（例如 Agent 自己的 scripts 目录）时，
+让它直接调用仓库里的 `scripts/boss-hunt-tick-fmt.py` / `scripts/cron/*-fmt.py`，或像
+`scripts/cron/boss-hunt-inbox.sh` 那样只 `exec` 仓库脚本。若拷了一份到部署目录，只改仓库版本不会生效，
+必须同步。验证：把 `{'window','today_sent','send'}` 的 json 管道喂给**定时任务实际调用的那份** fmt 看输出。
+
+**（历史，旧 inbox 自动回话链路（`reply.py` / `human.py` / `reply-to`）已于 2026-11-06 cleanup-02 移除）自动回话不再静默（2026-10-29）**：`inbox()` 的自动回话循环原来有三个静默 `continue`
 （打开会话失败 / 最后一句是我说的 / 归属不明），实测会出现「新招呼 40 个｜今日已回 0/3」而一行说明都没有。
 现在固定输出 `自动回话：新招呼 N 个｜回 A｜需人工 M｜打开失败 X｜我最后说过 Y｜归属不明 Z`，
 且 `open_by_index` 失败会同一行重试一次再计失败。**`dry` 语义与回话闸门一个字都不要动** ——
@@ -289,17 +297,20 @@ caffeinate -i /usr/bin/python3 <skill>/scripts/boss_hunt.py tick --json
 `scan_windows` 以外的补池失败例外：`inbox_windows` 的失败仍整跳退出，回消息那条路径不降级。
 
 各 Agent 定时映射见 `docs/agent-adapters.md`。挂定时前先验证真实 wrapper 的 dry-run 入口；
-真发必须另有用户授权。脚本不推送微信，外部 cron 侧读取 JSON 决定如何通知。
+真发必须另有用户授权。脚本不直接推送消息，外部 cron 侧读取 JSON 决定如何通知。
 
-**播报丢了要有据可查（2026-10-29）**：投递失败发生在 tick 退出之后（Hermes 侧），脚本不可能知道这条发没发出去。
+**播报丢了要有据可查（2026-10-29）**：投递失败发生在 tick 退出之后（推送渠道侧），脚本不可能知道这条发没发出去。
 所以 `boss-hunt-tick-fmt.py` 渲染完会把同一条文本追加到 `~/.boss-hunt/data/broadcasts.log`
 （`[时间] window=HH:MM` + 正文 + `---`，可用 `BOSS_BROADCAST_LOG` 改路径；写失败只进 stderr，不影响 stdout 与退出码）。
-用户说「某点没收到播报」时：先看 `broadcasts.log` 有没有写出来（有 = 脚本侧正常，去查 Hermes 投递），
-再看 `cronjob_manage list` 的 `last_status` / `last_delivery_error`。
-两种已知的投递失败要分清：`iLink ... ret=-2 prepare failed — the user must send the bot a message first`
-是会话失效，让用户在微信里给 bot 发一句话即可；`Cannot connect to host ilinkai.weixin.qq.com` 是代理/DNS 抖动。
+用户说「某点没收到播报」时：先看 `broadcasts.log` 有没有写出来（有 = 脚本侧正常，去查推送渠道的投递），
+再看定时器自己的执行记录（如 Hermes 的 `cronjob_manage list` 里 `last_status` / `last_delivery_error`）。
+推送渠道常见两类失败要分清：会话/授权失效（通常要用户在渠道里给 bot 发一句话重新激活）和代理/DNS 抖动（重试即可）。
 
-每跳播报固定带 `📋 今日已发 N：品牌(等级)…`（只在窗口内输出，窗口外的补跑仍静默），
+每跳播报固定带「今日已发」清单（只在窗口内输出，窗口外的补跑仍静默），**必须一条一行写「公司 ｜ 职位」**，
+如 `· 示例公司 ｜ 区域经理`；`(A)/(B)` 等级字母和 `＋3` 这种省略写法一律不要 —— 用户原话
+「这样一段看不出有效信息」，他要看的是投了哪个岗。最多列 8 条，超出写「另有 N 个未列出」。
+数据取 `hunt_schedule.tick_today_sent` 的 `items[].brand / name`（`name` 才是岗位名，`grade` 只用于内部配额），
+`📮 HH:MM 跳｜发出 N｜今日 X/Y` 后面也不要再挂 `（A 2 · B 1）`。
 所以漏掉一跳也能从下一跳看到当天累计；`stop_reason=inspect_cap` 时无论发出几条都会显示
 `⏳ JD读取到上限，还有 N 个候选留下跳`。
 
@@ -351,9 +362,9 @@ caffeinate -i /usr/bin/python3 <skill>/scripts/boss_hunt.py tick --json
 {"provider":"deepseek","base_url":"https://api.deepseek.com/v1","model":"deepseek-chat",
  "api_key_env":"DEEPSEEK_API_KEY","num_predict":400,"timeout_s":45}
 ```
-`greet.py` 已支持两种后端：`provider=ollama`（默认，走 `/api/generate`）或 `deepseek/openai/cloud`（走 `/chat/completions` + Bearer key，key 从环境变量或 `~/.hermes/.env` 读，不回显）。实测 DeepSeek 1.1–1.5 秒/条、3/3 过闸门、字数 140–163（本地 9b 是 4–15 秒、4/4 还是 165–190）。切完用 `ollama stop <model>` 卸模型降温。
+`greet.py` 已支持两种后端：`provider=ollama`（默认，走 `/api/generate`）或 `deepseek/openai/cloud`（走 `/chat/completions` + Bearer key，key 依次从环境变量、`llm.env_file` / `$BOSS_HUNT_ENV_FILE`、`~/.boss-hunt/.env`、`~/.hermes/.env`（Hermes 兼容）读，不回显）。实测 DeepSeek 1.1–1.5 秒/条、3/3 过闸门、字数 140–163（本地 9b 是 4–15 秒、4/4 还是 165–190）。切完用 `ollama stop <model>` 卸模型降温。
 
-**口语化 + 压短（2026-10-24 实测）：** 用户嫌 AI 味重后加的两条约束——骨架①改「这行我做了 {years} 年」（不写死「本地生活这行」，否则投售前/SaaS 岗会错位）；RULES 里加「多用短句、少用四字词与书面连词、允许『这行/干了/跑了』」。
+**口语化 + 压短（2026-10-24 实测）：** 用户嫌 AI 味重后加的两条约束——骨架①改「这行我做了 {years} 年」（不写死「某某行业这行」，否则投售前/SaaS 岗会错位）；RULES 里加「多用短句、少用四字词与书面连词、允许『这行/干了/跑了』」。
 - **`length.max` 别设到 170 以下**：qwen3.5:9b 基本落在 165–190 字，max=150 时通过率只有 1/4（大量 `too_long` 回退模板），max=190 时 4/4 通过。提示词里写「目标 120–140 字」对 9b 无效，别指望它自己数字数。
 - **回退模板必须同步改成口语短版**：回退是常态（约 1/4），模板若还是「既擅长…也熟悉…沉淀」的长篇简历体，回退等于没改。实测 149 字口语模板既能兜底又不难看。
 - **③ 呼应段必须限死事实组合与符号**：不限的话模型会把意向城市（targets 里的城市）说成经历城市（「我在 A 和 B 城市的经验里都跑过」），还会把 `+500%` 写成「订单量 500%」（闸门拦不住，语义残缺）。
@@ -399,7 +410,7 @@ caffeinate -i /usr/bin/python3 <skill>/scripts/boss_hunt.py tick --json
 
 同理：给 `keywords` 加「驻外 / 外派 / 派驻」会同时抓回大量**工程外派岗**（弱电、幕墙、整椅、变压器）—— 要投海外方向就同步把这些词补进 `filters.title_hard_block`，判据同样是回放 `raw/` 后技术类残留为 0。
 
-**组合加分 `scoring.combo_bonus`：** 单关键词加分区分不出「餐饮本地生活 × 出海」这种双对口岗。配置形如 `[{"a":[餐饮,本地生活,外卖,连锁],"b":[海外,出海,驻外,北美],"score":5}]`，`score()` 里 a 和 b 同时命中才加分（匹配 blob = 标题+技能+行业+标签）。实测给这条 +5 后「海外餐饮营运经理（美国）50-80K」直接从中间升到第 3。
+**组合加分 `scoring.combo_bonus`：** 单关键词加分区分不出「某行业 × 出海」这种双对口岗。配置形如 `[{"a":[行业词1,行业词2,连锁],"b":[海外,出海,驻外],"score":5}]`，`score()` 里 a 和 b 同时命中才加分（匹配 blob = 标题+技能+行业+标签）。实测给这条 +5 后一个双对口的海外岗直接从中间升到第 3。
 
 **用户说「不要全是某个方向」时，光调排序分不够 —— 要加每轮硬名额。** 池子本身偏向那个方向时
 （关键词、组合加分、历史投递三件事互相强化），排序怎么调，头部还是那个方向。做配平要用三件套：
@@ -440,7 +451,7 @@ JD 里都写（旅游 OTA 写库存、化妆品写选址），拿它们当门店
 配合 `max_inspect_per_window` 封顶，并且 **b_pool 里已判过 B 的岗位要豁免粗标 C 检查** —— 粗标只看
 列表字段，拿它否掉已按 JD 定级的旧候选，池子会只进不出。
 
-**配额要按比例压进单跳预算，不能让 A 先发吃光。** `quota_for_now` 算出的是「本跳应发 A/B」，
+**配额要按比例压进单跳预算，不能让 A 先发吃光。** `quotas_for_now` 算出的是「本跳应发 A/B」，
 而 `max_per_window` 限制的是「本跳总数」；A 先发时若 A 配额 ≥ 上限，B 一条都发不出去（实测 22:00
 A8/B8 + 上限 8 → 发成 8A0B，跨行岗永远轮不上）。`do_send` 里用 `shrink_quotas` 按比例压缩，
 同一场景变 4A4B。改配额逻辑后必须验证 `by_grade` 而不是只看 `sent` 总数。
@@ -450,7 +461,7 @@ A8/B8 + 上限 8 → 发成 8A0B，跨行岗永远轮不上）。`do_send` 里�
 所以出现「本轮发出 0」、跳过统计里也只有 `skip_same_hr`/`skip_grade`、当轮又没有 A 档时，瓶颈是配额不是链路。
 验证发送链路用 `send 2`（压缩后 A1+B1）；要单发一条 B 才需要临时配置把预算放大，别改真配置。
 
-`quota_for_now` 按 ceil(剩余额度 / 含当前的剩余窗口数) 顺延，max_per_window 同时限制
+`quotas_for_now` 按 ceil(剩余额度 / 含当前的剩余窗口数) 顺延，max_per_window 同时限制
 每级与本跳总数；send N 只是总数上限，不覆盖日/窗口配额。carry_over=false 改用固定 per_window。
 额度仅 sent 后写账，跨日只重置日计数，保留 sent/contacts/池和缓存。
 
@@ -487,11 +498,11 @@ Unix 有 alarm，其他平台仅循环间检查。遗留锁不自动删除，避
 后者会把 HR 收到招呼一分钟后的「请给几个面试时段」判成我方，然后在 `inbox` 里 `continue` 掉，
 整段十分钟区间的回信永远不处理。判不出归属就记 `unknown` 进待核对：既不算已回复，也不入无回复库。
 查不到会话不算无回复。待确认仅统计已同步、未处理的面试消息，可能陈旧。
-summary.activity=false 时 cron 可不推送；有待确认仍展示。脚本不直接发微信。
+summary.activity=false 时 cron 可不推送；有待确认仍展示。脚本不直接推送消息。
 
-Phase B 的多轮主动回复：`scripts/reply.py`（读对话 → judge → 生成 → 闸门）与「打开指定会话」
-都已打通，归属判定靠会话气泡的 `.item-mine`（列表接口的 `fromId` 实测不可靠，别用）。
-设计与已知坑见 `references/inbound-chat-design.md`。
+Phase B 的旧回复引擎 `scripts/reply.py` 已于 2026-11-06 移除（cleanup-02），回 HR 只走对话模块（`chat`）。
+归属判定靠会话气泡的 `.item-mine`（列表接口的 `fromId` 实测不可靠，别用）这条仍然适用。
+旧设计与已知坑见 `references/inbound-chat-design.md`（历史文档）。
 
 **回消息闸门的判定顺序不能反，而且必须有一套离线测试集守着。** `self_contained` / `judge` 的顺序是：
 ① 整段先过「拒绝 / 人工模式」→ ② 必须有一个「邀约核心句」→ ③ 其余短句逐个检查是否安全。
@@ -501,10 +512,9 @@ Phase B 的多轮主动回复：`scripts/reply.py`（读对话 → judge → 生
 这类地点陈述也算人工。反向的坑是要求「每个短句都整句匹配」——「你好，看到你的简历，有兴趣聊聊吗」
 这种带客套的真邀约会被判需人工而漏回，改成「一个邀约核心句 + 其余短句只许安全」。
 
-改闸门或话术前跑 `python3 scripts/reply_eval.py`（测试集 `tests/fixtures/reply_cases.jsonl`，
-`--llm` 才调模型看文案）。判据是 **误自动必须 0**（发错话撤不回），漏自动只是少回一家。
-加用例后别把条数写死进断言（用 `len(E.load_cases())`），否则添一条用例就红一片；
-`tests/test_reply_gate.py` 只守「零误自动」这条红线。
+判据始终是 **误自动必须 0**（发错话撤不回），漏自动只是少回一家。旧链路时期由 `reply_eval.py` +
+`tests/fixtures/reply_cases.jsonl` 守（已随 cleanup-02 移除）；对话模块的同类红线由
+`tests/test_conversation_adversarial.py` 等测试守。
 
 **对话跳（`conversation.py` + `conv_rules.py`）必须先辨意图再开口，不能默认推进轮次。** 只按「轮次模板」
 发问时，HR 问「有相关工作经验吗」、说条件（前置收费 / 置换 / 自备 / 垫资）、要简历，都会被当成「对上一轮的补充回答」，
@@ -519,7 +529,7 @@ Phase B 的多轮主动回复：`scripts/reply.py`（读对话 → judge → 生
 判据是两条都绿，不是「新用例绿了」而已。
 
 自动回里任何「我整理一份发您」都是承诺：模板与 LLM 两条路径必须同一口径（都允许答应、
-都禁出现「简历」「附件」字样），并落成 `state.resume_followups` 提醒，否则承诺落空没人去发。
+都禁出现「简历」「附件」字样），否则承诺落空没人去发（旧链路时期靠 `state.resume_followups` 提醒，已随 cleanup-02 移除）。
 模板选择用 `zlib.crc32(job_id)`，不要用 `hash()` —— Python 每次进程哈希随机，同一岗位会轮流换话术。
 
 **「谁在等谁」追踪（`scripts/conv_state.py` + `unanswered`）**：每个会话存
@@ -540,17 +550,15 @@ python3 scripts/boss_hunt.py greet --job-id <id> [--times 2] [--no-cache]   # �
 python3 scripts/boss_hunt.py scan  [--target 名称] [--keyword 词] [--pages 3]
 python3 scripts/boss_hunt.py plan  [--top 20]          # 只报告，不发
 python3 scripts/boss_hunt.py send  N                   # 真发
-python3 scripts/boss_hunt.py inbox                     # 盯消息 + 分类 + 回面试
+python3 scripts/boss_hunt.py inbox                     # 盯消息 + 分类（只读；回 HR 走 chat）
 python3 scripts/boss_hunt.py unanswered [--hours 72] [--limit 20] [--json]  # 离线：谁在等谁（不开浏览器）
-python3 scripts/boss_hunt.py run   [--send N] [--inbox]
+python3 scripts/boss_hunt.py run   [--send N] [--inbox]   # 手动一键，定时任务用 tick
 python3 scripts/boss_hunt.py grade --jd-file jd.txt [--job-name 职位] [--brand 公司] [--industry 行业]
 python3 scripts/boss_hunt.py grades [--top 20] [--json]
 python3 scripts/boss_hunt.py tick [--dry-run] [--json]
 python3 scripts/boss_hunt.py rejects [--days 30] [--json]
 python3 scripts/boss_hunt.py ledger-repair [--dry-run|--apply]   # 隔离发送流水损坏尾部，不改前缀
-python3 scripts/boss_hunt.py ledger-ack --list | <event_id> --sent|--not-sent   # 人工核对 pending_verification
-python3 scripts/boss_hunt.py human-compact                      # 收敛人工话术（50 条上限 + 按月归档）
-python3 scripts/boss_hunt.py human-stats                        # 只看 hints，不整份读 entries
+python3 scripts/boss_hunt.py ledger-ack --list | <event_id> --sent --conv-key <key> --text-sha256 <hash>   # 人工核对 pending_verification；hash 从 --list 的 text_sha256 取，落成 --not-sent 同形
 python3 scripts/boss_hunt.py summary [--json]
 python3 scripts/dump_conversations.py [-o conv.json]   # 只读导出会话列表（谁回了什么），见 round-audit 第 6 节
 ```
@@ -598,10 +606,8 @@ python3 scripts/dump_conversations.py [-o conv.json]   # 只读导出会话列�
 | `sending.hidden_b_probe` | A 额度满后，还允许读几个粗标 A? 的 JD（捞「自报互联网、实则门店」的隐藏 B） | 默认 6；行业字段不准就调大 |
 | `sending.overseas_regex` / `overseas_max_per_round` | 某个方向每轮最多几个（按 `jobName` 正则计数） | 混投时用；被跳过的岗位不写 contacts，下轮可投 |
 | `scoring.city_bonus` | 按 `cityName` 给本地岗加分，如 `{"示例城市": 2}` | 只影响同档排序；旧配置仍需明显小于 a_min |
-| `scoring.blob_bonus` | 单边加分：命中任一 term 就加（`[{terms:[...],score:3}]`） | 本地生活/门店类、城市经理类各一条 |
+| `scoring.blob_bonus` | 单边加分：命中任一 term 就加（`[{terms:[...],score:3}]`） | 门店类、城市经理类各一条 |
 | `sending.verify_text` | 发送校验文本 | 默认取招呼语开头 8 字；`mode=llm` 时忽略，改用实际话术开头 |
-| `inbox.interview_auto_reply` | 是否自动回面试类 | 开了也不会替用户定时 |
-| `inbox.followup` | 已读不回 48h 补一句 | 默认关，先问用户 |
 | `grading.*` | roles、tracks 词表、unknown_side、require_role_for_ab | 用户确认 A/B 标准后填写，不把公司行业当 JD |
 | `sending.grade_quota` / `carry_over` / `max_per_window` | 固定日配额、顺延、窗口上限 | 示例 A22/B8；max_per_window 同时限制本跳总发送量 |
 | `schedule.timezone` / `windows` / `per_window` | 何时跑、固定模式每跳总数 | carry_over=false 才用 per_window；0 表示不发 |
@@ -631,14 +637,13 @@ python3 scripts/dump_conversations.py [-o conv.json]   # 只读导出会话列�
 **池子投光时先加城市/关键词，别先放宽去重 —— 但「同 HR 能挡多少」必须现算，别照搬旧数字。** 同 HR 去重
 （`brand|bossName`）能挡掉的量随池子结构变化很大：早期样本里 905 个岗位只有 7 个 HR 挂多岗（放宽只多出个位数），
 而同一个账号投了 169 个之后，1881 个岗位里「同 HR 已投、但本岗未投且 `judge` 通过」的有 **248 个**，
-其中 6 个是平台侧优质岗（生鲜平台 BDM、即时零售区域经理、本地生活平台 BDM、
-出行平台城市经理、即时零售销售总监、出海 BD 等）—— 这时该动的是去重规则，不是加词。
+其中 6 个是平台侧优质岗（多为头部平台的 BD / 区域经理 / 城市经理类）—— 这时该动的是去重规则，不是加词。
 三条现算命令（都在 `open_pool` 之外单独跑，不联网）：被挡且 `judge==pass` 的岗位数、其中平台侧品牌数、
 这些 `contacts` 平均挂几个岗。岗位数大就改成「同 HR ＋ **不同岗位** ＋ 距上次投递 > N 天（建议 7）」放行，
 别一刀切永久跳过 —— 同一个 HR 手上常有好几个岗，投另一个岗不算骚扰。
 
 **用户问「我是不是更适合投某类头衔」时，用池内三列数据回答，不要给泛泛的匹配建议。** 对每个候选头衔算：
-标题命中数、`judge==pass` 数、被「同 HR 已投」挡掉的数；再看职级是否与现职对得上（现职是 BDM/城市经理时，
+标题命中数、`judge==pass` 数、被「同 HR 已投」挡掉的数；再看职级是否与现职对得上（例如现职是经理级时，
 「销售主管」这类低一档的标题即使命中也很少，且多为低底薪+提成，不值得进搜词）。示例：城市经理 117 命中/19 过筛、
 区域经理 130/44、销售经理 96/33、销售主管仅 5/2 —— 结论只能是「城市经理＋区域经理是主线，销售主管不进搜词」，
 而不是「城市经理更契合」这种没有数字的判断。
@@ -665,9 +670,9 @@ python3 scripts/dump_conversations.py [-o conv.json]   # 只读导出会话列�
 `python3 scripts/boss_hunt.py --config /tmp/cfg.json send 1`（`--config` 必须在子命令前）。
 跑完把结果当验证结论，**不要**顺手把这临时配置当新配置；要改真配置先问用户。
 
-`filters.text_block` 里的 JD 红线词（`外呼`、`扫街`、`陌拜`）会连带挡掉相当一部分本地生活岗，
+`filters.text_block` 里的 JD 红线词（如 `外呼`、`扫街`）会连带挡掉相当一部分线下拓展类岗位，
 因为那类 JD 本来就写这些词。加之前先把这个代价告诉用户、让他选保留还是只针对新方向；
-用户说保留就不要再自作主张撤。
+用户说保留就不要再自作主张撤。`陌拜` 这类词算不算红线由用户决定；用户说不算，就别再自作主张加回去。
 
 **补跑一轮发出 0 时的三步判定**（别先怀疑锁/浏览器）：
 ① `candidates − sent − contacts` 算「真可投」；② 拿 `state.grade_cache` 里本轮的 `reason` 做分布；
@@ -711,12 +716,20 @@ python3 scripts/dump_conversations.py [-o conv.json]   # 只读导出会话列�
   重点行用 emoji 起头。数字与他给的路径/地址可以贴，但一行只放一个事实；列表超过 5 条只报前几条 + 其余数量。
   这条同样管多主题汇报（如「BOSS 投递 + BOSS 对话 + 回消息跳」出现在同一条消息里）：按主题分块，
   每块自带标题行，块间空行；不要把三个组件的结果并进同一段。
+- **推送给用户的任何文本（IM / 手机通知等推送渠道）里都不能出现命令、路径、job id、任务编号、代码块。**
+  用户明确说过「像这种完全没法看，你要用自然语言直接描述」—— 他收到的定时失败通知里带着
+  命令、输出目录和随机任务号，整条就读不下去。所以：① 脚本播报的每一行都要是人话
+  （核对发送就写「先确认那个 HR 有没有收到消息」，不要写「执行 ledger-ack --list」）；
+  ② 系统通知里带代码的部分，转述成人话再发，不原样转发；
+  ③ 「第几跳」「今日 6/18」这类业务数字可以留，路径和随机 id 不行。
 - 一行摘要（本轮发了谁 + 今日累计 N/M + 异常），细节每条一行；列表最多 5 条，其余只报数量。
 - **投递跳/回消息跳按用户要求「每跳回一行」**（2026-10-28）：`boss-hunt-tick.sh` 窗口内固定输出
   `📮 HH:MM 跳｜发出 N｜今日 X/30`，0 发出时第二行跟 `同HR已投 / 判级不过 / 无沟通按钮` 前 3 项；
-  `boss-hunt-inbox.sh` 固定输出 `💬 回消息跳｜已回/约面试/失败/感兴趣` 一行。
+  回消息跳固定输出 `💬 回消息跳｜约面试 N｜感兴趣 N｜待你回 N` 一行，约面试最多列 3 条原话
+  （wrapper 与 fmt 在仓库 `scripts/cron/boss-hunt-inbox{.sh,-fmt.py}`，部署处的 wrapper
+  只需 `exec` 它，和对话跳一样；旧的「已回/失败」已随旧回话链路去掉）。
   窗口外的补跑仍静默 —— 否则他看到的又是「任务在跑但一条没发」却没有任何播报，会当成坏了。
-- **预演期（`inbox.auto_reply.dry=true`）播报要多两行**：`🧪 预演 品牌：本来要发的文案`（最多 3 条）
+- （历史，旧自动回话已移除）**预演期（`inbox.auto_reply.dry=true`）播报要多两行**：`🧪 预演 品牌：本来要发的文案`（最多 3 条）
   和 `📎 待发资料 N 条：HR 名`。用户要靠这两行判断「文案像不像人话、答没答对题」，只给
   「已回 0」等于什么都不说。渲染在 `boss-hunt-inbox-fmt.py` 里按 `auto_replied[].source` 含 `:dry` 取行。
 - **`cronjob_manage action=resume` 之后 `next_run_at` 常是过去时刻**：调度器会补跑一次，而 `tick`
@@ -729,8 +742,8 @@ python3 scripts/dump_conversations.py [-o conv.json]   # 只读导出会话列�
   失败样本 = **明确拒绝 + 投递满 72h 无回复**（两类分开计数、都进分母），先分归属（只有
   `our_apply` 算投放精准度），原因分类决定该动哪个配置；报当天新增 + 累计 + 原因分布，无新增不推。
 - 系统消息（「附件简历已发送」「对方已同意」）不是 HR 说话，不要当招呼汇报。
-- 报 `inbox` 结果必须分清「读到了」和「回了」：默认策略是**只自动回面试类**，其他（感兴趣 / 要简历 /
-  HR 主动招呼）只分类不发。汇报时把「已自动回 N」「需你人工回 M（列品牌）」和「为什么不自动回」
+- 报 `inbox` 结果必须分清「读到了」和「回了」：`inbox` 只读不发（2026-11-06 cleanup-02 起），回 HR 只走对话模块
+  `chat`（:30 跳：问两轮、发简历、面试固定回复、回绝）。汇报时把「已自动回 N」「需你人工回 M（列品牌）」和「为什么不自动回」
   写在一起 —— 只报「近 72 小时新消息 155 条」，他会以为脚本坏了。
 - **「收到好多招呼」和「我们发了多少」是两件事**：`inbox` 里的「新招呼 N 条」是 HR 主动发来的，
   我们投出去的量只看 `state.sent` 里当天的记录。用户问「上一轮是不是发了好多招呼」时，先把这两个数
@@ -743,20 +756,18 @@ python3 scripts/dump_conversations.py [-o conv.json]   # 只读导出会话列�
   用「分方向回复率」回答——不要拿几条拒信倒推方向（多数「不匹配」是 HR
   主动招呼后自己否掉的，不是我们的投递）。报的时候要说清两件事：打开消息页会清未读；
   查不到会话的那批投递单列「无法判断」，不算作无回复。
-- **暂停投递时，把「回消息」那一路一起停。** 自动回复是独立的、也会真发消息的路径（面试类 / 新招呼类），
-  只停投递跳，脚本仍会替用户回人。两条一起 `cronjob_manage action=pause`，恢复时一起 `resume`，
+- **暂停投递时，把对话跳（`chat`，:30）一起停。** 对话模块是独立的、也会真发消息的路径（问两轮 / 发简历 / 回绝），
+  只停投递跳，脚本仍会替用户回人；回消息跳（`inbox`，:10）cleanup-02 起只读，可不停。两条一起 `cronjob_manage action=pause`，恢复时一起 `resume`，
   并用 `action=list` 核 `state`、`next_run_at`；暂停原因写进 `paused_reason`，免得下次忘了为什么停着。
   代码审查发现 P0 需要停投时，先停再修，别边修边发。
 - 用户只发一句「为什么」时，指的多半是他刚收到的播报：先看 `runs.log` 末尾和最近一次输出，
   不要从代码倒着猜。
-- **用户说「结果发微信」/「接着在微信聊」时**：结论和证据整理成一条发过去，
-  `hermes send -t weixin -f <tmpfile>`（`-f` 读文件，长文本别走命令行参数，避免被转义吃掉字符）；
-  微信里按短句分行 + 空行分组 + emoji 起重点行，长表格、代码和日志留在桌面端，别塞进微信。
-  桌面端只留一句「已发到微信（`Sent to weixin home channel`）」，别把微信那条再复述一遍。
-- **发送成功 ≠ 用户收到了。** iLink 会话未就绪时发送会静默失败（`ret=-2 … the user must send
-  the bot a message first`），脚本照常返回 ok，用户什么都没收到。投递类任务报数之前核一眼
-  `cronjob_manage action=list` 里的 `last_delivery_error`；恢复方式是在微信里给 bot 发一句话
-  重新点亮会话，不用重配。
+- **用户要求「结果推到手机 / 接着在 IM 里聊」时**：结论和证据整理成一条，经你的推送渠道发出
+  （长文本走文件参数，别走命令行参数，避免被转义吃掉字符）；手机端按短句分行 + 空行分组 + emoji 起重点行，
+  长表格、代码和日志留在桌面端。桌面端只留一句「已推送」，别把那条再复述一遍。
+- **发送成功 ≠ 用户收到了。** 推送渠道的会话未就绪时可能静默失败、调用方照常返回成功，
+  用户什么都没收到。投递类任务报数之前核一眼定时器/推送侧的投递错误记录
+  （如 Hermes 的 `cronjob_manage action=list` 里 `last_delivery_error`），按渠道说明恢复会话。
 
 ## 聊天页的真实结构（2026-10-28 真机实测，改发送逻辑前必读）
 
@@ -803,7 +814,6 @@ ledger 行的 `meta.via`（`trusted_click` / `enter` / `js_fallback` / `confirm_
 `ledger-ack --list` 里是 `cmd=conv_resume` / `text="<resume>"` 那条，此时自动回话整个停摆。
 **核对别靠翻会话列表**：`新招呼` / `全部` 标签只渲染一屏几十行、还会随会话状态漂移，pending 那条常常已经不在列表里，
 滚动搜文本也搜不到。直接让用户在 BOSS 上打开这个 HR 的会话看一眼有没有「附件简历已发送」，拿到答复再 `--sent` / `--not-sent`。
-交接与验证协议见 `docs/handoff-2026-10-28-live-send.md`、`docs/live-check-chat-send.md`。
 
 ## 同 HR 冷却窗口（2026-10-28）
 
@@ -897,7 +907,7 @@ codex 施工若写明「发送路径不动」，这一处要自己补并补一�
 
 1. **配置搬事实**：用户资料、城市与城市码、关键词、模板、每日上限 —— 手工搬进新 `config.json`，
    别整体复制，旧版字段名可能不同。
-2. **状态必须交接受保护字段**：`sent`、`contacts`、`replied`、`inbox_seen`、`inbox_ts` 要一起搬，
+2. **状态必须交接受保护字段**：`sent`、`contacts`、`replied`、`inbox_seen` 要一起搬，
    否则会给同一批 HR 重发招呼、同一批面试消息重复处理；`day` / `day_count` 也搬，
    否则当天额度凭空重置，会多投一轮。
 3. **不要搬的**：`raw/` 只作历史快照（可以留着看，不参与筛选）、旧日志格式、旧代码目录。
@@ -909,24 +919,17 @@ codex 施工若写明「发送路径不动」，这一处要自己补并补一�
    `cronjob_manage action=list` 确认 `next_run_at` 落在新窗口上，最后等第一跳查 `state.sent` 有没有新记录。
 6. 确认新的入口跑通后，才停用旧实例（停 cron、归档旧目录），别两个都留着。
 
-## 最近状态（先读这个）
+## 改安全相关代码的做法（发送 / 点击 / 闸门）
 
-本技能已经过多轮「codex 只读审查 → 施工单 → codex 修 → 再审查」加固，每轮文档都留着：
-`docs/codex-review-*-round*.md`（缺陷清单，带 `file:line`）、`docs/codex-fix-prompt-round*.md`（施工单）、
-`docs/codex-optimization-plan-*.md`（成本方案）。**动发送/点击/闸门逻辑前先读最近一轮复审报告**，
-里面列的失效路径都是实测复现过的。
+动发送、点击、闸门逻辑之前，先读最近一次审查结论里列出的失效路径——它们都是实测复现过的。
+推荐固定分工：**一个 Agent 只读分析给方案 → 另一个实现 → 再只读审 diff → 你自己跑测试与真机验收**，
+不要让同一个进程自查自修。审查报告、施工单这类过程文档放在仓库外，不提交。
 
-改这类安全代码的固定做法（**2026-10-28 起用户指定分工：Claude 分析给方案 → Codex 实现 → Claude 审 diff
-→ 我自己跑测试与真机验收**，不再只用 codex 自查自修）：
-
-1. `cronjob_manage action=pause` 停掉投递跳**和**回消息跳（两条都会真发消息）。
-2. 先把缺陷清单+证据写成分析单 `docs/claude-analysis-brief-*.md`（每条带 file:line、我的替身复现结论、
-   要它拍板的问题），让 Claude 只读产出方案 `docs/claude-plan-*.md`：要求按「根因 / 改法（到函数与字段）/
-   验收 / 风险与取舍」写，并明确「重发=账号风险、漏发=少投一家」这个不对称代价。
-3. 把方案切成批次写施工单 `docs/codex-fix-*.md`，`codex exec --sandbox workspace-write` 实现，
-   要求它为每条补「能复现原缺陷的测试」并贴出 unittest 真实输出。
-4. 每批改完让 Claude 审 diff（只读），问法固定在「能不能上机 / 有没有必须改」；它的结论存
-   `docs/claude-review-*.md`。**它说能上机之前不恢复 cron。**
+1. 先暂停投递跳**和**对话跳（两条都会真发消息；回消息跳只读，可不停）。
+2. 把缺陷清单 + 证据写成分析单（每条带 `file:line`、替身复现结论、要拍板的问题），只读产出方案：
+   按「根因 / 改法（到函数与字段）/ 验收 / 风险与取舍」写，并明确「重发=账号风险、漏发=少投一家」这个不对称代价。
+3. 把方案切成批次实现，要求为每条补「能复现原缺陷的测试」并贴出 unittest 真实输出。
+4. 每批改完只读审 diff，问法固定在「能不能上机 / 有没有必须改」。**审查说能上机之前不恢复定时任务。**
    收尾复审（整批改动的最后一轮）用四问，比泛泛 review 有效得多：① 有没有引入
    「重发 / 多发 / 说错话」的路径（要 file:line + 触发条件）② 规则之间有没有互相矛盾
    （同一口径散在多处、闸门与发送层守卫冲突）③ 恢复定时前必须补的检查项 ④ 一句话能不能恢复。
@@ -935,7 +938,7 @@ codex 施工若写明「发送路径不动」，这一处要自己补并补一�
    真实 wrapper 跑一次，最后看真机那一跳的输出与 ledger。每批单独 commit，便于回滚。
    **子代理自报的「全绿」不算验收**：它跑的是自己写的用例，会把盲区一起测绿。必须自己再补一批
    对抗性输入（混合句、拒绝句、带条件句）打同一个闸门 —— 实测它交付「25/25 全绿」，我临时补
-   「聊聊？base 在成都」当场抓到一条误放行。新加的用例要进 `tests/fixtures/` 长期守着。
+   「聊聊？base 在杭州」当场抓到一条误放行。新加的用例要进 `tests/fixtures/` 长期守着。
    **codex 会自己加施工单里没写的规则，并且带着红测试交付。** 实测它报「已完成」时全量是 8 红、
    补了一遍更像的改动后变成 28 红（新加的「带问号就转人工」守卫把所有 greet/回答都拦了）。
    处置顺序固定：先 `git checkout -- <改动的文件>` 回到绿基线 → 自己按最小口子重做 → 再跑全量。
@@ -945,7 +948,7 @@ codex 施工若写明「发送路径不动」，这一处要自己补并补一�
 长任务用 `notify` 后台跑 + `pgrep -f` 轮询；**不要因为一两分钟没输出就杀掉重跑** ——
 `claude -p` 的 text 模式全程缓冲、stream-json 也要等生成才有 delta，3–8 分钟出结果很正常。
 后台启动 agent CLI 时带上 `< /dev/null` 关闭 stdin，否则它会等 3 秒（stdin 是常开的管道时可能更久）。
-命令、轮询、报告提取、断点续跑的完整操作见 `references/codex-hardening-loop.md`，四条最费时间的坑：
+四条最费时间的坑：
 
 - **同级判定被复制到多处时，修法必须是「收敛成唯一入口 + 测试断言旧写法已消失」**，不是逐处打补丁。
   归属解析曾散在读会话、状态扫描、历史构建、原子点击四个位置，修好一处，其余三处的「默认对方」
@@ -955,7 +958,7 @@ codex 施工若写明「发送路径不动」，这一处要自己补并补一�
 - **从 codex 日志里提报告要锚定结论句再切片，并核对字节数**：`log.rfind("审查结论")` 之后才是正文；
   用 `rfind("\n## ")` 会倒抓到 AGENTS.md/SKILL.md 的内容，静默写出几百 KB 的假报告。正常报告 3–15 KB，
   提取后先打印首 200 字确认，不要直接 `git add`。
-- **codex 进程被外部终止时不要重跑整张施工单**：写一份 `docs/codex-resume-<轮次>.md` 只描述
+- **codex 进程被外部终止时不要重跑整张施工单**：写一份续跑说明（放仓库外，别提交）只描述
   「当前哪几条测试红、哪条要求未落地、顺手产生的垃圾目录要清」，让它接着修。重跑施工单会把已改好的
   部分再改一遍，且新起的进程不知道上一轮的取舍。
 - **不要 pipe codex 输出到 `tail`/`head`**（会吃掉退出时的缓冲），也不要让子代理替跑长任务：
@@ -973,6 +976,3 @@ codex 施工若写明「发送路径不动」，这一处要自己补并补一�
 `references/login-and-verification-pitfalls.md` 第 11 条。
 恢复定时任务前先手动跑一跳（**用 `send 2`，`send 1` 的结构性发不出 B**），确认结果是 `sent` 且有确认气泡，
 再交回 cron；失败就把选择器核出来，别靠重试撞。
-
-分级判据（no_signal=C + min_hits）、Phase B 自动回复（「新招呼」标签入口）、人工介入闭环
-（reply-to + human.py）的背景与 DOM 三个坑见 `docs/handoff-2026-10-28.md`。

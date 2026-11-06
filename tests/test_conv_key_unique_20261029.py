@@ -19,7 +19,7 @@ class ConvKeyUniqueTest(unittest.TestCase):
                 for k, b, o in zip(keys, brands, bosses)]
 
     def test_duplicate_keys_are_rekeyed_by_pair(self):
-        rows = self._rows(['id:62001'] * 3, ['美团', '乙示例', '丙示例服饰'], ['周一一', '吴二二', '陈女士'])
+        rows = self._rows(['id:62001'] * 3, ['甲示例', '乙示例', '丙示例服饰'], ['周一一', '吴二二', '郑三三'])
         out = CD.conversation_rows(StubBrowser(rows), None)
         keys = [r['conv_key'] for r in out]
         self.assertEqual(len(keys), 3)
@@ -33,7 +33,7 @@ class ConvKeyUniqueTest(unittest.TestCase):
         self.assertEqual(len(set(keys)), 2, keys)
 
     def test_unique_keys_untouched(self):
-        rows = self._rows(['id:1', 'id:2'], ['美团', '乙示例'], ['周一一', '吴二二'])
+        rows = self._rows(['id:1', 'id:2'], ['甲示例', '乙示例'], ['周一一', '吴二二'])
         out = CD.conversation_rows(StubBrowser(rows), None)
         self.assertEqual([r['conv_key'] for r in out], ['id:1', 'id:2'])
 

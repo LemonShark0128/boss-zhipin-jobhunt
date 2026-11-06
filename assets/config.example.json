@@ -46,8 +46,7 @@
       }
     },
     "_interview_tip": "只表达愿意面、并请对方先给时段；绝不替用户答应具体时间。",
-    "interview_reply": "您好，方便安排线上面试吗？我这边时间需要先确认一下，您先给几个可选时段，我和您确认后再回复您，谢谢！",
-    "followup_template": "您好，之前给您发过消息，想确认下这个岗位还在招吗？我这边随时可以聊。"
+    "interview_reply": "您好，方便安排线上面试吗？我这边时间需要先确认一下，您先给几个可选时段，我和您确认后再回复您，谢谢！"
   },
   "targets": [
     {
@@ -134,16 +133,10 @@
   "inbox": {
     "lookback_hours": 72,
     "max_listed": 5,
-    "interview_auto_reply": false,
     "patterns": {
       "reject": "不合适|不匹配|不符合|已招满|招满了|暂不考虑|不太适合|有更合适的人选|已招到",
       "interview": "面试|面谈|复试|初试|约个?时间|什么时候方便|线上|线下|面试官",
       "interested": "感兴趣|有兴趣|简历|方便沟通|聊聊|沟通一下|想了解|加个微信|加微信"
-    },
-    "followup": {
-      "_tip": "对已读不回 48h 的岗位补一句，转化率通常高于单纯加量投递；默认关。",
-      "enabled": false,
-      "after_hours": 48
     }
   },
   "schedule": {
@@ -178,9 +171,6 @@
     "bridge_port": 8899,
     "label": "boss-hunt",
     "chrome_app": "Google Chrome"
-  },
-  "paths": {
-    "workdir": "~/.boss-hunt/data"
   },
   "grading": {
     "_tip": "换行业改这里：roles 是目标职能词；industries 是列表弱信号；jd_signals 是详情页终判词。以下均为示例，请按访谈替换。所有词表支持正则。",
@@ -230,7 +220,6 @@
     "decline_not_interested": true,
     "auto_accept_resume_request": true,
     "resume_request_card": "我想要一份您的附件简历",
-    "resume_sent_pattern": "附件简历.{0,40}已发送|简历已发送|已向.{0,10}发送.{0,6}简历",
     "system_texts": ["你与该职位竞争者PK情况"],
     "enabled": false,
     "dry": false,

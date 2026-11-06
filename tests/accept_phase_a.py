@@ -37,8 +37,6 @@ def main():
         return result.stdout
     cfg=json.loads((REPO/'assets/config.example.json').read_text())
     cfg['paths']={'workdir':str(root/'data')}
-    cfg['inbox']['interview_auto_reply']=False
-    cfg['inbox']['followup']['enabled']=False
     path=root/'config.json';path.write_text(json.dumps(cfg,ensure_ascii=False))
     cfg=HC.load_config(str(path))
     (root/'platform.txt').write_text('负责商户拓展和开城，落实平台政策。')
@@ -71,12 +69,12 @@ def main():
             say('round=%d sent=%d by_grade=%s day_count=%d'%(i+1,result['sent'],result.get('by_grade',{}),result['day_count']))
         assert st['day_by_grade']=={'A':22,'B':8} and st['day_count']==30
         say('state='+cfg['paths']['state']+' day_by_grade='+str(st['day_by_grade']))
-    say('\n# 7 $ state.day_by_grade={"A":18,"B":0}; quota_for_now(cfg,state,12:00/14:00/22:00)')
+    say('\n# 7 $ state.day_by_grade={"A":18,"B":0}; quotas_for_now(cfg,state,12:00/14:00/22:00)')
     quota_state={'day':HC.stamp(cfg,'%Y-%m-%d'),'day_count':18,'sent':{},'day_by_grade':{'A':18,'B':0}}
     HS.save_state(cfg,quota_state)
     for hour in [12,14,22]:
-        q=HQ.quota_for_now(cfg,HS.load_state(cfg),now.replace(hour=hour))
-        say('%02d:00 -> A=%d B=%d'%(hour,*q))
+        q=HQ.quotas_for_now(cfg,HS.load_state(cfg),now.replace(hour=hour))
+        say('%02d:00 -> A=%d B=%d'%(hour,q.get('A',0),q.get('B',0)))
     say('SPEC_CONFLICT: 剩余 A=22-18=4，公式的本跳 A 不可能 >4；按 R2 公式验收，未声称通过矛盾条件。')
     rows={str(i):dict(brand='示例公司',title='城市经理',grade=g,applied_ts=HC.stamp(cfg),detected_ts=HC.stamp(cfg),kind=k,raw='构造样本',attribution=a,reason=r,target='示例方向')
           for i,(g,k,a,r) in enumerate([('A','explicit','our_apply','无理由婉拒'),('A','explicit','our_apply','无理由婉拒'),('B','explicit','our_apply','经验不符'),('B','explicit','hr_initiated','已招满'),('A','no_reply','our_apply','无回复'),('B','no_reply','our_apply','无回复'),('A','no_reply','unknown','无回复')])}

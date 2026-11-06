@@ -34,10 +34,12 @@ class RevealTests(unittest.TestCase):
         self.assertEqual(result['processed'], 1)
         self.assertEqual(result['revealed'], 1)
         self.assertEqual(result['reveal_failed'], 0)
-        self.assertEqual(result['out_of_view'], 0)
+        # conv-11：out_of_view 是初始积压，揭示成功不扣减。
+        self.assertEqual(result['out_of_view'], 1)
         self.assertEqual(sum(call[0] == 'text' for call in calls), 1)
         self.assertFalse(any('📭' in line for line in self.out))
-        self.assertEqual(rev.call_count, 2)
+        # conv-11：按需揭示一次，不再先批量揭示。
+        self.assertEqual(rev.call_count, 1)
         reset.assert_called_once_with(self.br, 10)
 
     def test_receipt_on_first_reveal_skips_candidate(self):
@@ -53,11 +55,13 @@ class RevealTests(unittest.TestCase):
         send_text.assert_not_called()
         self.assertFalse(calls)
         self.assertFalse(any('📭' in line for line in self.out))
-        self.assertEqual(result['candidates'], 0)
+        # conv-11：候选先合并计数，当前 DOM 回执行随后跳过。
+        self.assertEqual(result['candidates'], 1)
         self.assertEqual(result['revealed'], 0)
         self.assertEqual(result['reveal_failed'], 0)
-        reveal.assert_called_once()
-        reset.assert_called_once_with(self.br, 10)
+        # conv-11：处理时已在当前 DOM，无需揭示或复位。
+        reveal.assert_not_called()
+        reset.assert_not_called()
 
     def test_receipt_on_second_reveal_skips_open(self):
         c = self.module()
@@ -68,14 +72,16 @@ class RevealTests(unittest.TestCase):
              patch.object(c.chat_dom, 'reset_list_scroll') as reset:
             result, opened, calls, send_text, _ = self.run_hop(
                 items=[item], row_snapshots=[[], other, other, own])
-        opened.assert_not_called()
-        send_text.assert_not_called()
-        self.assertFalse(calls)
+        # conv-11：按需读到正常行即处理，不再批量揭示或读取第二次揭示回执。
+        opened.assert_called_once()
+        send_text.assert_called_once()
+        self.assertEqual([call[0] for call in calls], ['text', 'resume'])
         self.assertFalse(any('📭' in line for line in self.out))
         self.assertEqual(result['revealed'], 0)
         self.assertEqual(result['reveal_failed'], 0)
-        self.assertEqual(reveal.call_count, 2)
-        reset.assert_called_once_with(self.br, 10)
+        # conv-11：当前行存在，无需揭示或复位。
+        reveal.assert_not_called()
+        reset.assert_not_called()
 
     def test_failures_push_at_most_three_and_do_not_open(self):
         for reason in ('ambiguous', 'not_found', 'no_virtual_list'):
@@ -100,10 +106,11 @@ class RevealTests(unittest.TestCase):
 
     def test_second_reveal_failure_pushes(self):
         (result, opened, _, _, _), _, _ = self.hop(retry_fail=True)
-        opened.assert_not_called()
-        self.assertEqual(result['revealed'], 0)
-        self.assertEqual(result['reveal_failed'], 1)
-        self.assertEqual(sum('📭' in line for line in self.out), 1)
+        # conv-11：仅按需揭示一次，不触发替身的第二次揭示失败。
+        opened.assert_called_once()
+        self.assertEqual(result['revealed'], 1)
+        self.assertEqual(result['reveal_failed'], 0)
+        self.assertEqual(sum('📭' in line for line in self.out), 0)
 
     def test_caps_and_timestamp_order(self):
         self.cfg['conversation']['per_hop'] = 8
@@ -111,7 +118,8 @@ class RevealTests(unittest.TestCase):
         self.assertEqual(result['processed'], 8)
         self.assertEqual(result['revealed'], 8)
         self.assertEqual([call.kwargs['conv_key'] for call in opened.call_args_list],
-                         ['id:fiction%d' % i for i in range(1, 9)])
+                         # conv-11：最旧优先处理 age=10 到 age=3。
+                         ['id:fiction%d' % i for i in range(10, 2, -1)])
         self.setUp()
         self.cfg['conversation']['daily_cap'] = 0
         (result, opened, calls, _, _), _, _ = self.hop(10)
@@ -145,8 +153,9 @@ class RevealTests(unittest.TestCase):
              patch.object(c, '_execute', side_effect=RuntimeError('fictional failure')):
             with self.assertRaisesRegex(RuntimeError, 'fictional failure'):
                 self.run_hop(items=[item], row_snapshots=[[], visible, visible, visible])
-        self.assertEqual(reveal.call_count, 2)
-        reset.assert_called_once_with(self.br, 10)
+        # conv-11：异常前当前行已出现，没有揭示，因此也无需复位。
+        reveal.assert_not_called()
+        reset.assert_not_called()
 
     def test_js_and_malformed_bridge_returns(self):
         dom = self.module().chat_dom

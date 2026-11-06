@@ -84,11 +84,11 @@ class QuotaTests(Base):
     def test_formula_and_fixed_window(self):
         st = HS.load_state(self.cfg); st['day_by_grade'] = {'A': 18, 'B': 0}
         now = datetime.fromisoformat(st['day']+'T12:00').replace(tzinfo=HC.cfg_tz(self.cfg))
-        self.assertEqual(HQ.quota_for_now(self.cfg, st, now), (1, 2))
-        self.assertEqual(HQ.quota_for_now(self.cfg, st, now.replace(hour=14)), (1, 2))
-        self.assertEqual(HQ.quota_for_now(self.cfg, st, now.replace(hour=22)), (4, 8))
+        self.assertEqual(HQ.quotas_for_now(self.cfg, st, now), {'A': 1, 'B': 2})
+        self.assertEqual(HQ.quotas_for_now(self.cfg, st, now.replace(hour=14)), {'A': 1, 'B': 2})
+        self.assertEqual(HQ.quotas_for_now(self.cfg, st, now.replace(hour=22)), {'A': 4, 'B': 8})
         self.cfg['sending']['carry_over'] = False; self.cfg['schedule']['per_window'] = 3
-        self.assertEqual(HQ.quota_for_now(self.cfg, st, now), (3, 3))
+        self.assertEqual(HQ.quotas_for_now(self.cfg, st, now), {'A': 3, 'B': 3})
 
     def test_send_quota_and_pool_without_repeated_jd(self):
         self.raw([self.job('a'+str(i)) for i in range(30)] + [self.job('b'+str(i), '示例品牌行业') for i in range(15)])

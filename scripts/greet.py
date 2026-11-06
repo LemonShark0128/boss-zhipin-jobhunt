@@ -42,6 +42,8 @@ import time
 import urllib.error
 import urllib.request
 
+import hunt_config as HC
+
 DEFAULTS = {
     "mode": "template",
     "length": {"min": 90, "max": 200},
@@ -447,27 +449,6 @@ def basic_safety(text, cfg, job=None):
     return not reasons, reasons
 
 
-def bound_reply(text, brief):
-    """人工要点改写：数字与经历必须能对上要点，过度自由改写转人工。"""
-    cfg = {'user': {'greeting': {'facts': [brief]}}}
-    ok, reasons = basic_safety(text, cfg)
-    brief_clauses = [_strip_lead(c) for c in _clauses(brief)]
-    safe = {'可以的', '方便的', '方便', '可以', '您想先了解哪块',
-            '岗位负责哪个区域', '这个岗位负责哪个区域', '岗位的团队规模是多少',
-            '方便说下这个岗位负责的区域和团队规模吗', '您想先聊什么呢'}
-    for clause in _clauses(text):
-        if clause in safe:
-            continue
-        stripped = _strip_lead(clause)
-        if stripped in brief_clauses:
-            continue
-        if DIGIT_RE.findall(clause):
-            continue      # 数字分句已由 basic_safety 对齐要点
-        if EXPERIENCE_VERB_RE.search(clause) and _similarity(stripped, brief_clauses) < 0.40:
-            reasons.append('claim_not_in_brief:' + clause)
-    return not reasons, reasons
-
-
 def clean(text):
     t = (text or "").strip()
     t = re.sub(r"^```[a-z]*|```$", "", t).strip()
@@ -644,20 +625,25 @@ def _post(url, payload, timeout, headers=None):
         return json.load(r)
 
 
-def _env_key(name):
-    """从环境变量或 ~/.hermes/.env 取 key；不回显。"""
+def _env_key(name, llm=None):
+    """取模型 key，不回显。顺序（audit-01 Q11）：环境变量 → llm.env_file / $BOSS_HUNT_ENV_FILE
+    → ~/.boss-hunt/.env → ~/.hermes/.env（Hermes 部署的兼容位置）。"""
     v = os.environ.get(name or "") if name else ""
-    if v:
-        return v
-    p = os.path.expanduser("~/.hermes/.env")
-    try:
-        with open(p, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith(name + "="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-    except Exception:
-        pass
+    if v or not name:
+        return v or ""
+    files = [(llm or {}).get("env_file"), os.environ.get("BOSS_HUNT_ENV_FILE"),
+             "~/.boss-hunt/.env", "~/.hermes/.env"]
+    for p in files:
+        if not p:
+            continue
+        try:
+            with open(os.path.expanduser(p), encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith(name + "="):
+                        return line.split("=", 1)[1].strip().strip('"').strip("'")
+        except Exception:
+            continue
     return ""
 
 
@@ -669,7 +655,7 @@ def ollama_status(cfg):
     """(ok, msg)：本地模式看服务+模型；云端模式只检查 key 在不在。"""
     llm = block(cfg)["llm"]
     if _cloud(llm):
-        key = llm.get("api_key") or _env_key(llm.get("api_key_env") or "DEEPSEEK_API_KEY")
+        key = llm.get("api_key") or _env_key(llm.get("api_key_env") or "DEEPSEEK_API_KEY", llm)
         if not key:
             return False, "no_key:%s" % (llm.get("api_key_env") or "DEEPSEEK_API_KEY")
         return True, "ok:%s@%s" % (llm.get("model"), llm.get("provider") or "cloud")
@@ -687,18 +673,23 @@ def ollama_status(cfg):
     return True, "ok:%s" % want
 
 
+def _cache_stamp(cfg):
+    """缓存写入时间按配置时区（audit-01 #13）。"""
+    return HC.stamp(cfg)
+
+
 def _generate_raw(cfg, prompt):
     llm = block(cfg)["llm"]
     timeout = float(llm.get("timeout_s") or 60)
     if _cloud(llm):
-        key = llm.get("api_key") or _env_key(llm.get("api_key_env") or "DEEPSEEK_API_KEY")
+        key = llm.get("api_key") or _env_key(llm.get("api_key_env") or "DEEPSEEK_API_KEY", llm)
         if not key:
             return None, "llm_no_key"
         url = str(llm.get("base_url") or "").rstrip("/") + "/chat/completions"
         payload = {
             "model": llm.get("model"),
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": float(llm.get("temperature") or 0.7),
+            "temperature": float(llm.get("temperature", 0.7)),
             "top_p": float(llm.get("top_p") or 0.9),
             "max_tokens": int(llm.get("num_predict") or 400),
             "stream": False,
@@ -721,7 +712,7 @@ def _generate_raw(cfg, prompt):
         "prompt": prompt,
         "stream": False,
         "think": bool(llm.get("think")),
-        "options": {"temperature": float(llm.get("temperature") or 0.7),
+        "options": {"temperature": float(llm.get("temperature", 0.7)),
                     "top_p": float(llm.get("top_p") or 0.9),
                     "num_predict": int(llm.get("num_predict") or 360)},
     }
@@ -798,7 +789,7 @@ def generate(cfg, job, jd_text="", fallback=None, use_cache=True, log=None):
                   + _feedback(cand, rs, g))
     secs = round(time.time() - t0, 1)
     if text:
-        _cache_put(cfg, key, {"text": text, "ts": time.strftime("%Y-%m-%d %H:%M"),
+        _cache_put(cfg, key, {"text": text, "ts": _cache_stamp(cfg),
                               "model": model, "chars": len(text), "secs": secs})
         return {"text": text, "source": "llm", "attempts": attempts,
                 "reasons": reasons, "secs": secs}

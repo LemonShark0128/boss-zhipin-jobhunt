@@ -11,7 +11,7 @@ python3 scripts/boss_hunt.py unanswered --hours 72 --limit 20 --json
 
 ## 状态更新
 
-`inbox` 的只读状态扫描写入 `state.conv_state[conv_key]`。与自动回话开关独立，即使 `auto_reply.enabled=false` 也会扫描。默认 `inbox.status_scan_max=20`，`inbox.stale_hours=72`。只检查当前可定位的已渲染会话，不把虚拟滚动列表视为全量历史。
+`inbox` 的只读状态扫描写入 `state.conv_state[conv_key]`。（旧自动回话链路已于 cleanup-02 移除，`inbox` 只读。）默认 `inbox.status_scan_max=20`，`inbox.stale_hours=72`。只检查当前可定位的已渲染会话，不把虚拟滚动列表视为全量历史。
 
 顺序为待我回、等对方、其余；前两类按最久未检查优先，其余按最后消息时间倒序。稳定键、头部身份和气泡正文均必须通过验证；归属来自 `.message-item.item-mine`，不使用 fromId 推断。消息时间优先取 DOM 的明确时间戳，缺失时允许使用精确会话身份匹配的快照 `msgTime/lastTS`；两者都缺失时保守保留旧状态，不用当前时间冒充消息时间。正文缺失、身份不匹配或归属未知均不会触发发送。
 
@@ -28,5 +28,5 @@ python3 scripts/boss_hunt.py unanswered --hours 72 --limit 20 --json
 - 招呼语、缓存和模板共用候选人事实来源。数字分句采用保守的受控短句匹配，完整保留指标和团队等主体，不从岗位薪资借数字。事实短句改写可能回退模板；模板也不合规则不发送。
 - 历史销售额可引用 facts；面试、到岗、薪资承诺，以及出差、驻外、外派、异地等个人意愿转人工。
 - 点击首次沟通前必须明确读取到平台招呼语关闭；开启、空结果、缺少布尔状态均中止，不自动调整设置。
-- `inbox.auto_reply.daily_cap` 默认 3，0 保持为 0；auto_reply、interview_reply、followup 共用流水额度，人工 reply-to 独立。额度检查位于发送事务内，失败不消耗已发送额度。
+- （历史）`inbox.auto_reply.daily_cap` 曾是 auto_reply、interview_reply、followup 共用的流水额度；这三条发送路径已于 cleanup-02 移除，`send_safety` 里的额度分支暂未清理。
 - RPC 顶层 error 抛出包含错误码和消息的异常。关闭标签只累计确认成功项；失败保留 ID、抛出明确错误，客户端仍执行关闭。连接、导出和业务异常均进入清理。

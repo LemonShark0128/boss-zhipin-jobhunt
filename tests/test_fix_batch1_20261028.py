@@ -3,14 +3,11 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
-from pathlib import Path
 from unittest.mock import Mock, patch
 
 from test_phase_a import Base, B
 import hunt_state as HS
 import outbound as O
-from test_round7 import Page as ReplyPage, TEXT as REPLY_TEXT
 from test_round8 import Page, JOB, TEXT
 import chat_send as CS
 import send_safety as S
@@ -32,33 +29,6 @@ class Batch1(Base):
         for result, expected in cases:
             with self.subTest(result=result):
                 self.assertEqual(CS.click_outcome(result), expected)
-
-    def test_reply_trusted_failures_stop_all_three_commands_and_retries(self):
-        for cmd in ('auto_reply', 'interview_reply', 'followup'):
-            for failure in (RuntimeError('lost receipt'), {'isError': True}, {'ok': False}):
-                with self.subTest(cmd=cmd, failure=failure), tempfile.TemporaryDirectory() as root:
-                    cfg = dict(self.cfg, paths={'workdir': root, 'state': str(Path(root) / 'state.json')})
-                    page = ReplyPage()
-                    def click(tab, selector):
-                        page.clicks += 1
-                        if isinstance(failure, Exception):
-                            raise failure
-                        return failure
-                    page.click = click
-                    msg = B.INTERVIEW_DEFAULT if cmd == 'interview_reply' else REPLY_TEXT
-                    with patch.object(B.time, 'sleep'):
-                        for _ in range(2):
-                            with self.assertRaisesRegex(RuntimeError, 'unresolved_send'):
-                                B.send_in_chat(page, 1, msg, '', 'id:1', cfg, cmd=cmd, job_id='j')
-                            self.assertEqual(S.ledger_latest(cfg)[0]['status'], 'unknown')
-                            self.assertEqual(page.clicks, 1)
-
-    def test_reply_precheck_failure_is_failed_without_click(self):
-        page = ReplyPage(mutate='identity')
-        result = B.send_in_chat(page, 1, REPLY_TEXT, '', 'id:1', self.cfg)
-        self.assertEqual(result, 'send_aborted:identity_changed')
-        self.assertEqual(S.ledger_latest(self.cfg)[0]['status'], 'failed')
-        self.assertEqual(page.clicks, 0)
 
     def test_send_one_trusted_failure_uses_real_shared_sender(self):
         self.raw([self.job()])

@@ -9,7 +9,7 @@
    `ts`（配置时区）/ `name` / `brand` / `salary` / `grade` / `target` / `greet_source`。
    按 `ts` 过滤当天，数条数，并逐条读 `name`：有没有技术岗/产品岗混进来。
 2. `state.day_count` / `day_by_target` —— 与 `sending.daily_cap` 比，确认额度有没有超、分城市分布对不对。
-3. 定时任务侧：`~/.hermes/cron/executions.db`
+3. 定时任务侧：你的定时器执行记录（以 Hermes 为例是它的 cron 执行库，含下面两张表）
    - `executions`：`status` / `started_at` / `finished_at` / `error`；`finished-started` 就是真实耗时。
    - `cron_incidents`：`state=alerted` 且 `closed_at` 为空 = 同一故障反复发生且一直没关，要报给用户。
 4. 最后读 `runs.log`：按 `【` 切段，统计 `跳过(...)` 与回退原因（见 SKILL.md 排障一节）。
@@ -29,14 +29,14 @@
 复制一份配置到 scratch，关掉自动回复，把 workdir 指到 scratch，再跑 inbox：
 
 ```bash
-S=~/.hermes/cache/scratch/bh-check; mkdir -p $S/data
+export S="${TMPDIR:-/tmp}/bh-check"; mkdir -p "$S/data"
 python3 - <<'PY'
 import json, os
+S = os.environ["S"]
 c = json.load(open(os.path.expanduser("~/.boss-hunt/config.json")))
-c["paths"]["workdir"] = os.path.expanduser("~/.hermes/cache/scratch/bh-check/data")
-c.setdefault("inbox", {})["interview_auto_reply"] = False
-c["inbox"].setdefault("followup", {})["enabled"] = False
-json.dump(c, open(os.path.expanduser("~/.hermes/cache/scratch/bh-check/config.json"), "w"), ensure_ascii=False)
+c["paths"]["workdir"] = os.path.join(S, "data")
+# inbox 已只读（cleanup-02 移除了旧自动回话/跟进），无需再关开关；scratch 里别跑 chat/send/tick
+json.dump(c, open(os.path.join(S, "config.json"), "w"), ensure_ascii=False)
 PY
 cp ~/.boss-hunt/data/state.json $S/data/
 BOSS_HUNT_CONFIG=$S/config.json python3 <skill>/scripts/boss_hunt.py --json inbox
@@ -90,8 +90,8 @@ python3 scripts/dump_conversations.py -o conv.json
   实测 143 条投递只有 107 条能按 id 命中，剩下必须按 `brandName` 回查，否则会把「有回复」漏算成「没回复」。
 - 报数口径：回复率的分母只取「能查到会话的投递」，查不到的那批（岗位关闭 / 会话被清）单列为「无法判断」，
   别混进分子分母，也别因此说「没这家公司」。
-- 时间：`dump_conversations.py` 的 `msg_time` 用系统时区（本机 PDT），`state.sent[].ts` 用配置时区
-  （Asia/Shanghai），换算差 15 小时后再对照；给用户报时间一律换成上海时间。
+- 时间：`dump_conversations.py` 的 `msg_time` 与 `state.sent[].ts` 都按配置时区（`schedule.timezone`）写，
+  可直接对照；给用户报时间统一用配置时区。
 
 ## 7. 「回复说不匹配」先核归属，再谈方向
 
@@ -121,7 +121,7 @@ python3 scripts/dump_conversations.py -o conv.json
 **判断「投递方向有没有问题」的正确证据是分方向的回复率，不是几条拒信。** 做法：
 把 `state.sent` 的岗位按方向分组（城市/区域经理、大客户/BD、售前/解决方案、客户成功、出海·外派、
 技术产品），每组算「有回复 / 已投」，再对照岗位本身性质。例：售前 22 条里 16 条是 SaaS 厂商
-（办公协作、语音、财税、营销、工业软件等），而候选人做的是本地生活 BD——这类岗本来就聊不起来，零回复是方向的锅，
+（办公协作、语音、财税、营销、工业软件等），而候选人做的是与之无关的线下行业 BD——这类岗本来就聊不起来，零回复是方向的锅，
 不是话术的锅。回复集中在哪个方向，就说明履历在哪个方向能对话。
 
 ## 8. 拒绝采集与每日复盘

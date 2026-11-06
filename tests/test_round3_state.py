@@ -90,15 +90,32 @@ class StateTests(unittest.TestCase):
             result=B.scan_conv_states(self.cfg,Mock(),1,st,now=200)
         self.assertTrue(result['deadline']); self.assertEqual(result['checked'],1); self.assertEqual(len(st['conv_state']),1)
 
-    def test_status_reader_header_and_dom_side(self):
+    def test_status_reader_verifies_active_identity_not_title_text(self):
+        # 2026-11-06：旧实现读 .chat-title 文本校验公司/HR，真机上这个选择器读不到当前会话（10-29 起 151 次全失败）。
+        # 现在与对话模块同源：打开后用 active_conversation 的 conv_key 校验身份，标题文本不参与。
+        br=Mock(); row={'conv_key':'pair:甲科技|王招聘','brand':'甲科技','boss':'王招聘'}
+        mine={'who':'mine','classes':'item-myself','text':'hello','ts':'100'}
+        with patch.object(CD,'conversation_rows',return_value=[row]), patch.object(CD,'open_by_index',return_value=('ok','',[])):
+            with patch.object(CD,'active_conversation',return_value={'conv_key':'pair:乙公司|李先生','messages':[mine]}):
+                with self.assertRaisesRegex(ValueError,'unknown_conversation'): B.read_status_message(br,1,row)
+            with patch.object(CD,'active_conversation',return_value={'conv_key':'','messages':[]}):
+                with self.assertRaisesRegex(ValueError,'unknown_conversation'): B.read_status_message(br,1,row)
+            br.json.return_value={'header':'永远同一个标题'}
+            with patch.object(CD,'active_conversation',return_value={'conv_key':'pair:甲科技|王招聘','messages':[
+                    {'who':'friend','classes':'item-friend','text':'在吗','ts':'50'}, mine]}):
+                result=B.read_status_message(br,1,row)
+        self.assertEqual((result['side'],result['owner'],result['text'],result['seq'],result['ts']),('me','mine','hello',2,100))
+        self.assertEqual(result['ts_epoch'],100000)
+
+    def test_status_reader_millisecond_timestamp_and_unknown_owner(self):
         br=Mock(); row={'conv_key':'id:1','brand':'甲科技','boss':'王招聘'}
         with patch.object(CD,'conversation_rows',return_value=[row]), patch.object(CD,'open_by_index',return_value=('ok','',[])):
-            br.json.return_value={'header':'乙公司 李先生','side':'them','ts':100,'text':'hi'}
-            with self.assertRaisesRegex(ValueError,'unknown_conversation'): B.read_status_message(br,1,row)
-            br.json.return_value={'header':'甲科技 王招聘','classes':'item-self','ts':100,'text':'hello'}
-            self.assertEqual(B.read_status_message(br,1,row)['side'],'me')
-        expr=br.json.call_args.args[1]
-        self.assertIn('classes:el ? el.className',expr); self.assertIn('.message-content',expr); self.assertIn('.chat-title',expr)
+            with patch.object(CD,'active_conversation',return_value={'conv_key':'id:1','messages':[
+                    {'who':'friend','classes':'item-friend','text':'hi','ts':'1700000000000'}]}):
+                self.assertEqual(B.read_status_message(br,1,row)['ts'],1700000000)
+            with patch.object(CD,'active_conversation',return_value={'conv_key':'id:1','messages':[
+                    {'who':'unknown','classes':'','text':'系统','ts':'100'}]}):
+                self.assertIsNone(B.read_status_message(br,1,row)['side'])
 
     def test_stale_reject_once_explicit_precedence_and_corruption(self):
         st={'sent':{'j':{'brand':'甲','name':'经理','grade':'A','ts':'2026-01-01 00:00'}},
@@ -131,8 +148,9 @@ class StateTests(unittest.TestCase):
 
     def test_status_reader_retains_dom_side_with_snapshot_timestamp(self):
         br=Mock(); row={'conv_key':'id:1','brand':'甲科技','boss':'王招聘','last_ts':100}
-        with patch.object(CD,'conversation_rows',return_value=[row]), patch.object(CD,'open_by_index',return_value=('ok','',[])):
-            br.json.return_value={'header':'甲科技','classes':'message-mine','ts':0,'text':'手动回复'}
+        with patch.object(CD,'conversation_rows',return_value=[row]), patch.object(CD,'open_by_index',return_value=('ok','',[])), \
+                patch.object(CD,'active_conversation',return_value={'conv_key':'id:1','messages':[
+                    {'who':'mine','classes':'message-mine','text':'手动回复','ts':''}]}):
             result=B.read_status_message(br,1,row)
         self.assertEqual((result['side'],result['ts']),('me',100))
 
@@ -143,9 +161,9 @@ class StateTests(unittest.TestCase):
             st['conv_state']['id:1']=self.update({},'them',100,200)
             return {'checked':1,'deadline':True,'failed':0,'skipped_failures':0}
         out=[]
-        with patch.object(B,'scan_conv_states',side_effect=scan),patch.object(B,'send_in_chat') as send:
+        with patch.object(B,'scan_conv_states',side_effect=scan):
             result=B.inbox(self.cfg,br,1,st,out)
-        self.assertTrue(result['status_scan']['deadline']); send.assert_not_called()
+        self.assertTrue(result['status_scan']['deadline']); br.click.assert_not_called(); br.fill.assert_not_called()
         self.assertIn('id:1',json.loads(self.root.joinpath('state.json').read_text())['conv_state'])
         self.assertTrue(any('待我回 1' in line for line in out))
 

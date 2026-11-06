@@ -20,14 +20,14 @@
 ## 1. 硬约束（违反即失败）
 
 1. **不真发消息**。任何自测都用替身（stub）或 dry-run，`B.send_one` 不许对真实浏览器调用。
-2. **不写 `~/.boss-hunt/`**。自测一律在 `$TMPDIR` 或 `~/.hermes/cache/scratch/` 建临时 config + workdir。
+2. **不写 `~/.boss-hunt/`**。自测一律在 `$TMPDIR` 建临时 config + workdir。
 3. **不删改 `~/.boss-hunt/data/`**（那是真实投递记录）。
 4. **不 git commit / push**。人类验收后统一提交。
 5. **不引入新依赖**（只用 Python 标准库 + 现有 `chrome_mcp.py`）。
 6. **向后兼容**：老 `config.json`（没有 `grading` / `grade_quota` 段）必须照旧能跑，
    缺字段时用代码内默认值，且 `validate` 不许因此报 ❌。
 7. **不焊死任何个人/地域/行业数据到代码**：所有词表进 config；`assets/config.example.json`
-   必须是通用示例（不能用「上海/成都/华莱士/餐饮本地生活」这种个人配置）。
+   必须是通用示例（不能用真实城市、品牌、行业方向这类个人配置）。
 
 ---
 
@@ -247,7 +247,7 @@ python3 scripts/boss_hunt.py rejects [--days 30] [--json]
 
 - 只用本地数据（`state.json` + `rejects.json` + `runs.log` 可选）
 - `--json` 输出结构化字段（`sent` / `by_grade` / `rejects` / `no_reply` / `reason_breakdown` / `pending`）
-- **不发微信**（脚本保持解耦；由 cron 侧拿 `--json` 结果调 `hermes send`）
+- **不发微信**（脚本保持解耦；由 cron 侧拿 `--json` 结果交给推送渠道）
 - 当天无投递也无拒绝 → 输出「今天没有活动」，仍然可被 cron 判空不推送
 
 ---
@@ -258,7 +258,7 @@ python3 scripts/boss_hunt.py rejects [--days 30] [--json]
 
 1. `assets/config.example.json`
    - 新增 `grading` / `sending.grade_quota` / `schedule.*_windows`
-   - **通用示例**：不出现个人城市、不出现餐饮/本地生活专有词、不出现具体品牌黑名单
+   - **通用示例**：不出现个人城市、不出现个人求职方向的行业专有词、不出现具体品牌黑名单
    - 用「示例行业」加注释说明「换行业改这里」
 2. `docs/onboarding-interview.md`
    - 新增一节「确认 A/B 标准」，必问：

@@ -9,6 +9,7 @@ import hunt_config as HC
 import hunt_schedule as HQ
 import hunt_state as HS
 import outbound as O
+import send_safety as SS
 
 
 class SameHRWindowTests(Base):
@@ -22,7 +23,7 @@ class SameHRWindowTests(Base):
         self.st['contacts'] = ['品牌|HR']
 
     def ledger(self, rows):
-        with open(B.ledger_path(self.cfg), 'w') as f:
+        with open(SS.ledger_path(self.cfg), 'w') as f:
             for row in rows:
                 f.write(json.dumps(row) + '\n')
 
@@ -86,7 +87,7 @@ class SameHRWindowTests(Base):
         self.ledger([self.row(10), dict(brand='品牌', boss='HR', status='sent',
                      ts_epoch='invalid', ts=B.datetime.fromtimestamp(old, HC.cfg_tz(self.cfg)).isoformat()),
                      self.row(0, 'pending'), self.row(0, 'failed')])
-        with open(B.ledger_path(self.cfg), 'a') as f:
+        with open(SS.ledger_path(self.cfg), 'a') as f:
             f.write('broken\n[]\n{"status":"sent"}\n')
         with patch('builtins.open', wraps=open) as reader:
             self.assertEqual(HS.contact_last_sent(self.st, self.cfg), {'品牌|HR': old})

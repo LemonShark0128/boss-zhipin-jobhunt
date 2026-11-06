@@ -41,7 +41,7 @@ class OutOfViewOwnTextTests(unittest.TestCase):
         self.assertEqual(ledger.read_bytes(), before)
 
     def test_send_prefix_is_own_without_new_record(self):
-        original = '看到你们在招虚构经理，这行我干了5年。在虚构公司做本地生活'
+        original = '看到你们在招虚构经理，这行我干了5年。在虚构公司做示例行业'
         self.assert_own('send', original, original[:25])
 
     def test_html_entity_prefix_is_own(self):

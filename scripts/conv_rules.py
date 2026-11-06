@@ -30,6 +30,7 @@ PATTERNS = {
               r'(?<![不没])(?:优先|会|将|更)考虑(?:其他|别的)(?:候选人|人选)|'
               r'倾向(?:于)?.{0,8}(?:不同|其他|别的|更).{0,10}(?:候选人|人选)|'
               r'不(?:太|是很)?相符|'
+              r'抱歉.{0,12}(?:寻找|在找|物色)(?:其他|别的).{0,6}(?:候选人|人选)|'
               r'(?:背景|经历|经验|方向|专业).{0,12}不(?:太|是很)?(?:相关|对口)|'
               r'很遗憾.{0,20}(?:(?:无法|不能|未能)(?:进入|通过|推进|继续|安排(?:面试|下一轮))|'
               r'不(?:太|是很)?(?:合适|匹配|符合|相符))|'
@@ -44,6 +45,7 @@ PATTERNS = {
               r'(?:你|您).{0,8}(?:到岗|入职).{0,5}(?:吗|呢|？|\?)|'
               r'自我介绍|(?:介绍|说说).{0,4}(?:你自己|您自己|自己)|'
               r'(?:上一份|上份|上家|上一家).{0,10}(?:工作|公司|离职)|'
+              r'离职(?:的)?(?:原因|理由)|为什么(?:要|想)?(?:离职|换工作|看机会|看新机会)|'
               r'(?:之前|以前|原来)(?![^。！？?\n]*(?:吗|没有?|[？?])).{0,12}(?:做|负责|带|管)|'
               r'(?:之前|以前|原来)[^。！？?\n]{0,12}(?:什么|哪些)|'
               r'(?:多少|几个|几家|几人)[^。！\n]{0,8}[？?吗呢]|'
@@ -51,11 +53,23 @@ PATTERNS = {
               r'(?:经历|经验|背景|履历).{0,10}(?:说说|聊聊|介绍|讲讲|详细|具体)|'
               r'(?:前置收费|自备|垫资|押金|加盟费)|置换.{0,4}(?:资源|客户|名单|货物|押金|费用)|'
               r'详细.{0,6}(?:说说|介绍|讲讲|说明)|'
-              r'(?:交换|加|留|给|发|提供).{0,10}(?:电话|手机|微信|联系方式|weixin|wechat)|'
+              r'(?:交换|互换|换|加|留|给|发|提供).{0,10}(?:电话|手机|微信|联系方式|weixin|wechat)|'
               r'(?:电话|手机|微信|联系方式).{0,8}(?:多少|交换|给我|发我|方便|吗|？|\?)|'
               r'(?:以上|上述|前面|刚说).{0,20}(?:接受|考虑|可以|能否|是否)|'
               r'什么意思|怎么说|具体指什么|能.{0,4}解释|(?:这个|那样|这样).{0,5}(?:呢|可以吗|行吗)|'
               r'^(?:为什么|怎么|哪方面|哪些方面)[？?]?$',
+    # conv-10：在职状态自动答；意向城市（targets[].city）内的工作地点自动答可以（调动/外派/出差仍转人工）
+    'employment': r'在职还是离职|(?:是否|是不是|还)在职|(?:目前|现在|当前)(?:是)?(?:在职|离职)(?:状态)?(?:吗|呢|[？?]|还是)|'
+                  r'在职(?:状态)?(?:吗|呢|[？?])',
+    'location': r'(?:接受|能接受|可以接受|考虑).{0,6}(?:工作)?(?:地点|地址|城市|base|调动|外派|出差|异地)|'
+                r'(?:工作)?(?:地点|地址|base).{0,10}(?:接受|可以吗|能接受|方便吗|ok吗|OK吗)|'
+                r'调动.{0,6}(?:接受|可以|能吗)',
+    # conv-10：HR 主动招呼 / 城市说明等陈述，按招呼走正常询问流程（不能吞掉要简历：classify 里另做排除）
+    'outreach': r'(?:考虑|看|寻找|找|关注)(?:一下|下)?(?:新的?|其他)?(?:工作)?机会|'
+                r'(?:经历|经验|背景|简历).{0,12}(?:吻合|匹配|契合|适合|感兴趣)|'
+                r'对(?:你|您).{0,10}(?:经历|经验|背景).{0,6}感兴趣|'
+                r'(?:适合|匹配)(?:我们|这个|该)的?(?:岗位|职位)|'
+                r'求职地|意向城市|期望城市|我们(?:公司)?(?:是|在)[\u4e00-\u9fa5]{2,3}(?:呢|哦|哈)',
     'experience': r'(?:你|您).{0,8}(?:经历|经验|项目|业绩|团队)|'
                   r'(?:有没有|是否有|有|做过|接触过|熟悉|了解).{0,8}(?:相关|这方面|类似)?(?:的)?(?:工作)?(?:经验|经历|资源|客户|团队)[^。！\n]{0,12}[？?吗呢]|'
                   r'(?:有没有|是否有).{0,10}(?:经验|资源|团队)|'
@@ -73,7 +87,12 @@ PATTERNS = {
               r'简历.{0,5}(?:发|给|传)|(?:提供|投递|发送).{0,5}简历|'
               r'(?:求|要|来|看看|看下|看一下|拿)(?:一下|一份|一|份|个|下)?(?:你的|您的)?(?:附件)?简历',
     'greet': r'你好|您好|哈喽|\bhi\b|\bhello\b|在吗|聊聊|聊一下|沟通一下|交流一下|感兴趣|有兴趣|有意向',
+    # conv-10：纯确认/致谢（「好的」「收到，我同步给用人经理…」）不转人工，静等
+    'ack': r'^\s*(?:好的?|好滴|好嘞|嗯+|ok|收到|了解|明白|谢谢|感谢)[\s，,。.!！~～]*(?:谢谢|感谢)?[\s，,。.!！~～]*$|'
+           r'^\s*(?:好的|收到)[，,。\s]*(?:谢谢[，,。\s]*)?(?:我|这边|我这边).{0,30}(?:同步|反馈|转给|看一下|看下|看看)',
 }
+EMPLOYMENT_ANSWER = '目前在职，在看合适的机会。'
+LOCATION_ANSWER = '工作地点可以接受。'
 DEFAULT_TEMPLATES = {
     'round1': '方便说下这个岗位主要的工作要求，和薪资结构（底薪/提成/奖金）吗？',
     'round2': '面试大概有几轮？可以安排线上面试吗？',
@@ -93,14 +112,16 @@ def safe_lead(text, cfg):
                               r'现在|马上|一会|以后|下次|今晚|早上|中午|简历|附件|'
                               r'电话|手机|微信|薪资|工资|待遇|整理|发您|发给|'
                               r'承诺|保证|一定|准时|同意|接受|我会|我将|发你|给你', text)
-            and G.basic_safety(text, cfg)[0] and not message_policy.commitment(text))
+            and G.basic_safety(text, cfg)[0] and not message_policy.commitment(text)
+            and not message_policy.self_negation(text))
 
 
 def safe_answer(text, cfg):
     """Require traceable fact excerpts, including number tokens, not HR claims."""
     if (not isinstance(text, str) or not text.strip() or len(text) > 60
             or re.search(r'[?？\n]|吗|么|呢', text)
-            or not G.basic_safety(text, cfg)[0] or message_policy.commitment(text)):
+            or not G.basic_safety(text, cfg)[0] or message_policy.commitment(text)
+            or message_policy.self_negation(text)):
         return False
     facts = G.facts(cfg)
     numbers = set(G.DIGIT_RE.findall('\n'.join(facts)))
@@ -133,8 +154,38 @@ def classify(text, cfg=None):
             candidate = re.sub(r'(?:已(?:经)?发(?:送|过)?|发过).{0,12}简历|'
                                r'简历.{0,5}(?:已(?:经)?发(?:送|过)?|发过)', '', candidate)
         if re.search(overrides.get(label, default), candidate, re.IGNORECASE):
+            if label == 'outreach':
+                # 冷招呼里夹着要简历的，交给 resume 判（PATTERNS 顺序里 resume 在后面）
+                if re.search(overrides.get('resume', PATTERNS['resume']), candidate, re.IGNORECASE):
+                    continue
+                return 'greet'
             return label
     return 'other'
+
+
+def _names_other_place(text, cfg):
+    """HR 句子里点名了某个地点但不含意向城市（如「工作地点在南京」「在浦东」）→ 不替用户答。"""
+    cities = [t.get('city') for t in (cfg or {}).get('targets') or [] if isinstance(t, dict) and t.get('city')]
+    generic = ('哪', '这', '那', '我们', '公司', '附近', '本地', '此', '该', '同城', '总部')
+    for m in re.finditer(r'(?:在|是|位于|base)\s*([\u4e00-\u9fa5]{2,6}?)(?=市|区|县|新区|呢|[，,。\s]|能|可以|是否|吗|的话|$)', text):
+        place = m.group(1)
+        if any(place.startswith(g) for g in generic):
+            continue
+        if not any(city in place for city in cities):
+            return True
+    return False
+
+
+def _city_ok(row, ctx, cfg):
+    """岗位城市在意向城市内才算：先看岗位 cityName，没有再看岗位名里只出现一个意向城市。"""
+    cities = [t.get('city') for t in (cfg or {}).get('targets') or [] if isinstance(t, dict) and t.get('city')]
+    if not cities:
+        return False
+    job_city = (ctx.get('job_city') or '').strip()
+    if job_city:
+        return any(city in job_city for city in cities)
+    hits = {city for city in cities if city in (row.get('title') or '')}
+    return len(hits) == 1
 
 
 def _empty(value):
@@ -159,10 +210,6 @@ def _card(record):
     card.update({key: '未答' if _empty(record['answers'].get(key)) else record['answers'][key]
                  for key in ANSWER_KEYS})
     return card
-
-
-def card_line(card):
-    return '｜'.join(str(card[key]) for key in ('brand', 'title', 'boss') + ANSWER_KEYS)
 
 
 def decide(record, new_msgs, ctx):
@@ -264,6 +311,11 @@ def decide(record, new_msgs, ctx):
             row['status'] = 'declined'
             continue
         intent = classify(message['text'], cfg)
+        if intent == 'ack':
+            # conv-10：新会话里的纯确认/致谢静等；已在问答中的「好的」可能就是答案，按 other 交给抽取
+            if row['status'] == 'new':
+                continue
+            intent = 'other'
         if row['status'] == 'round2' and intent == 'interview':
             if not re.search(r'明天|后天|今天|周[一二三四五六日天]|星期|上午|下午|晚上|\d+点|几点|时间|方便吗|可以吗|有空吗|行吗|\?|？',
                              message['text'] or ''):
@@ -272,6 +324,42 @@ def decide(record, new_msgs, ctx):
             row['status'] = 'closed'
         elif intent == 'manual':
             finish('manual')
+        elif intent in ('employment', 'location'):
+            # conv-10：固定答句 + 下一轮问句；每会话各答一次，答过再问 / 调动外派出差 / 城市不明 → 转人工
+            field = intent + '_answered_ts'
+            if intent == 'employment':
+                answer = EMPLOYMENT_ANSWER
+            elif (re.search(r'调动|外派|出差|异地|驻外', message['text'] or '')
+                  or _names_other_place(message['text'] or '', cfg)
+                  or not _city_ok(row, ctx, cfg)):
+                answer = ''
+            else:
+                answer = LOCATION_ANSWER
+            if not answer or row.get(field) is not None:
+                finish('manual')
+                continue
+            if text_sent():
+                actions[:] = [a for a in actions if a['type'] != 'send_text']
+                for name in ('asked_round1_ts', 'asked_round2_ts'):
+                    row[name] = record[name]
+            number = 2 if row['asked_round2_ts'] is not None else 1
+            template = round_questions(row, cfg, number)
+            if not template and number == 1:
+                number = 2
+                template = round_questions(row, cfg, number)
+            if not template:
+                template = ((cfg.get('conversation') or {}).get('templates') or {}).get(
+                    'experience_tail', DEFAULT_TEMPLATES['experience_tail'])
+                number = None
+            if send_text(answer + template, template, answer):
+                if row['status'] == 'new':
+                    send_resume()
+                row[field] = now
+                if number:
+                    name = 'asked_round%d_ts' % number
+                    if row[name] is None:
+                        row[name] = now
+                    row['status'] = 'round2' if number == 2 else 'engaged'
         elif intent == 'experience':
             if row.get('experience_answered_ts') is not None:
                 finish('manual')

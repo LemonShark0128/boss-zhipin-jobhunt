@@ -11,43 +11,33 @@
   python3 boss_hunt.py plan                 # 干跑：只报告会投谁，不发
   python3 boss_hunt.py greet  --job-id X    # 预览该岗位现写的招呼语（本地模型，可离线调）
   python3 boss_hunt.py send 2               # 真发（首跑建议 1-2 个）
-  python3 boss_hunt.py inbox                # 盯新招呼 + 分类回复
-  python3 boss_hunt.py run --send 5         # 扫描 + 发送 + 收件箱（定时任务用这个）
+  python3 boss_hunt.py inbox                # 盯新消息：只读归类与播报（回话走 chat）
+  python3 boss_hunt.py chat                 # 对话模块：回 HR / 发简历（定时 :30 跳）
+  python3 boss_hunt.py tick                 # 按配置窗口补池 + 投递（定时投递跳用这个）
+  python3 boss_hunt.py run --send 5         # 手动一键：扫描 + 发送 + 收件箱（定时任务不用它）
   python3 boss_hunt.py template --job-id X  # 预览渲染后的招呼语
 
 配置查找顺序：--config PATH > $BOSS_HUNT_CONFIG > ~/.boss-hunt/config.json
 """
 import argparse
-import glob
-import hashlib
-import math
 import json
 import os
 import re
 import sys
-import signal
 import uuid
-import unicodedata
 from functools import wraps
-from send_safety import (state_lock, ledger_send, ledger_guard, ledger_count,
-                         ledger_latest, ledger_path, ledger_repair, ledger_scan)
-from contextlib import contextmanager
+from send_safety import state_lock, ledger_guard, ledger_latest, ledger_repair, ledger_scan
 import time
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import chat_dom
-import chat_send as CS
-import conv_actions as CA
 import chrome_mcp as CM  # noqa: E402
 import greet as G        # noqa: E402  # 按岗位 JD 现写招呼语（greet.py）
-import reply as R        # noqa: E402  # Phase B：按 HR 消息回话（reply.py）
 from conv_state import update_conv_state
-from conv_parse import parse_message_owner, owner_parser_js
-from send_safety import reply_operation, terminal_operation, confirms_new_bubble
-import human as H        # noqa: E402  # 人工介入记录与话术沉淀（human.py）
+import conv_parse
+from conv_parse import parse_message_owner
 import hunt_config as HC
 import hunt_filter as HF
 import hunt_schedule as HQ
@@ -55,24 +45,9 @@ import hunt_state as HS
 import outbound as O
 
 
-
-
-
 # --------------------------------------------------------------------------
 # 配置
 # --------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # --------------------------------------------------------------------------
@@ -80,78 +55,9 @@ import outbound as O
 # --------------------------------------------------------------------------
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # --------------------------------------------------------------------------
 # 记账
 # --------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def locked_command(fn):
@@ -161,7 +67,10 @@ def locked_command(fn):
         try:
             with state_lock(cfg['paths']['state']):
                 st = HS.load_state(cfg)
-                ledger_guard(cfg)
+                # safety-01：入口只挡非对话的未核实；真正发送前各路径按自己的 scope 再闸
+                # audit-01 Q3：inbox 只读不发，不在入口挡（它自己会提示有待核对）
+                if getattr(args, 'cmd', None) != 'inbox':
+                    ledger_guard(cfg, scope='outbound')
                 HS.migrate_ledger(cfg, st)
                 return fn(args)
         except (ValueError, RuntimeError, OSError) as exc:
@@ -178,49 +87,60 @@ def locked_command(fn):
 # --------------------------------------------------------------------------
 
 
-
-
 # --------------------------------------------------------------------------
 # 浏览器动作
 # --------------------------------------------------------------------------
 
 
+# inbox --json 里旧回消息链路的计数键（cleanup-02 移除该链路后恒为 0，保留键以兼容播报脚本）
+LEGACY_REPLY_COUNTS = ("new_greet", "open_failed", "already_mine", "owner_unknown", "replied", "manual")
+# 已移除的旧回话开关：配置里仍显式打开时，validate 给出警告
+LEGACY_REPLY_SWITCHES = (("auto_reply", "enabled"), ("interview_auto_reply", None), ("followup", "enabled"))
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-INTERVIEW_DEFAULT = ("您好，方便安排线上面试吗？我这边时间需要先确认一下，"
-                     "您先给几个可选时段，我和您确认后再回复您，谢谢！")
+def legacy_reply_warnings(cfg):
+    inbox_cfg = cfg.get("inbox") or {}
+    warns = []
+    for key, sub_key in LEGACY_REPLY_SWITCHES:
+        value = inbox_cfg.get(key)
+        if sub_key:
+            value = value.get(sub_key) if isinstance(value, dict) else None
+        if value is True:
+            name = "inbox.%s%s" % (key, "." + sub_key if sub_key else "")
+            warns.append("%s 已移除，回话改由 conversation 模块负责，此开关不再生效" % name)
+    return warns
 
 
 def classify(msg, cfg):
+    """收件箱归类。拒信与对话模块同一套（audit-01 Q7：conv_rules 的 reject，含 conversation.patterns 覆盖）；
+    配置里显式写了 inbox.patterns.reject 时仍以它为准。面试/感兴趣仍用收件箱自己的词表。"""
+    import conv_rules
     pats = (cfg.get("inbox") or {}).get("patterns") or {}
-    rej = pats.get("reject") or r"不合适|不匹配|不符合|已招满|招满了|暂不考虑|不太适合|有更合适的人选|已招到"
+    text = msg or ""
+    if pats.get("reject"):
+        if re.search(pats["reject"], text):
+            return "reject"
+    elif conv_rules.classify(text, cfg) == "reject":
+        return "reject"
     itv = pats.get("interview") or r"面试|面谈|复试|初试|约个?时间|什么时候方便|线上|线下|面试官"
     itr = pats.get("interested") or r"感兴趣|有兴趣|简历|方便沟通|聊聊|沟通一下|想了解|加个微信|加微信"
-    for label, p in (("reject", rej), ("interview", itv), ("interested", itr)):
-        if re.search(p, msg or ""):
+    for label, p in (("interview", itv), ("interested", itr)):
+        if re.search(p, text):
             return label
     return "other"
+
+
+def is_system_text(text, cfg):
+    """列表快照是不是系统消息。与对话模块同一套（audit-01 Q7）：conv_parse 的系统文案/特征 + 简历回执正则；
+    配置里显式写了 inbox.patterns.system 时仍以它为准。旧默认正则里的「您的附件简历」会把 HR 要简历误当系统消息。"""
+    import conv_actions
+    override = ((cfg.get("inbox") or {}).get("patterns") or {}).get("system")
+    if override:
+        return bool(re.search(override, text or ""))
+    receipt = (cfg.get("conversation") or {}).get("resume_sent_pattern") or conv_actions.DEFAULT_RESUME_SENT_PATTERN
+    return (conv_parse.is_system_message({"text": text or ""}, conv_parse.system_message_texts(cfg),
+                                         conv_parse.system_patterns(cfg))
+            or bool(re.search(receipt, text or "")))
 
 
 def load_rejects(cfg):
@@ -236,8 +156,6 @@ def load_rejects(cfg):
 
 def save_rejects(cfg, rows):
     HS.atomic_json(os.path.join(cfg['paths']['workdir'], 'rejects.json'), rows)
-
-
 
 
 def message_data(it):
@@ -356,11 +274,8 @@ def _collect_rejects(cfg, st, items, jobs=None, now=None):
         if it and any(last_is_ours(cfg, row, it, text) for text in greetings.get(jid, [""])):
             record(jid, it, "no_reply")
     if json.dumps(rows, sort_keys=True, ensure_ascii=False) != before:
-        path = os.path.join(cfg["paths"]["workdir"], "rejects.json")
         save_rejects(cfg, rows)
     return rows
-
-
 
 
 def collect_stale_rejects(cfg, st, now=None):
@@ -370,7 +285,7 @@ def collect_stale_rejects(cfg, st, now=None):
         rows = load_rejects(cfg)
         changed = False
         for key, state in st.get('conv_state', {}).items():
-            if state.get('status') != 'stale' or state.get('ts_precision_coarse'):
+            if state.get('status') != 'stale' or state.get('ts_precision_coarse') or state.get('ignored'):
                 continue
             jid = state.get('job_id') or ''
             # Deduplicate by stable conversation identity, including old job rows.
@@ -401,6 +316,8 @@ def unanswered_report(st, now=None, hours=72, limit=5):
     now = time.time() if now is None else now
     items = {k: [] for k in ('waiting_me', 'waiting_them', 'stale', 'unknown', 'pending_verify')}
     for key, state in st.get('conv_state', {}).items():
+        if state.get('ignored'):
+            continue  # 一次性放弃的旧积压（status-02），有新消息时会自动清掉标记
         row = dict(state, conv_key=key)
         status = row.get('status', 'unknown')
         if status in ('waiting_them', 'stale'):
@@ -432,7 +349,7 @@ def cmd_unanswered(args):
     if args.unknown:
         data['items'] = {'unknown': data['items']['unknown']}
     if want_json(args):
-        print(json.dumps(data, ensure_ascii=False))
+        emit_json(dict(data, cmd='unanswered'))  # audit-01 Q6：补 schema/cmd，与其它命令一致
     else:
         c = data['counts']
         print('待我回 %d ｜等对方 %d ｜超时 %d（≥%gh）｜待核对 %d ｜读取待验证 %d' % (c['waiting_me'], c['waiting_them'], c['stale'], args.hours, c['unknown'], c['pending_verify']))
@@ -452,25 +369,25 @@ def read_status_message(br, tab, row):
     status, _, _ = chat_dom.open_by_index(br, tab, rows.index(target), conv_key=row['conv_key'])
     if status != 'ok':
         raise ValueError('unknown_conversation')
-    data = br.json(tab, """(() => {
-      const panel=document.querySelector('.chat-conversation,.chat-content,.chat-box');
-      const header=panel && panel.querySelector('.chat-title');
-      const es=panel ? [...panel.querySelectorAll('.message-item')] : [];
-      const el=es[es.length-1], content=el && el.querySelector('.message-content');
-      const raw=el && (el.getAttribute('data-ts') || el.getAttribute('data-time') || el.getAttribute('data-timestamp'));
-      const stamp=Number(raw) || Date.parse(raw) / 1000 || 0;
-      return {header:header ? header.innerText : '',
-        classes:el ? el.className : '',
-        text:content ? content.innerText : '', seq:es.length,
-        ts_epoch:Math.round(stamp > 1e12 ? stamp : stamp*1000),
-        ts:stamp > 1e12 ? stamp/1000 : stamp};
-      })()""", default={}) or {}
-    data['owner'] = parse_message_owner(data.get('classes'), data.get('text'))
+    # 身份只认与对话模块同源的 conv_key（active_conversation 读 .top-info-content 等头部的稳定 ID）。
+    # 旧实现用 .chat-title 文本比公司/HR 名，真机上该选择器读不到当前会话，10-29 起每次都 header mismatch。
+    conv = chat_dom.active_conversation(br, tab)
+    if not conv.get('conv_key') or conv.get('conv_key') != row['conv_key']:
+        raise ValueError('unknown_conversation: active %s' % (conv.get('conv_key') or '-'))
+    messages = conv.get('messages') or []
+    last = messages[-1] if messages else {}
+    raw = str(last.get('ts') or '').strip()
+    try:
+        stamp = float(raw)
+    except ValueError:
+        parsed = HC.parse_local_ts(raw, {}) if raw else None
+        stamp = parsed.timestamp() if parsed else 0
+    ts = stamp / 1000 if stamp > 1e12 else stamp
+    data = {'classes': last.get('classes') or '', 'text': last.get('text') or '', 'seq': len(messages),
+            'ts': ts, 'ts_epoch': int(round(ts * 1000))}
+    # active_conversation 已按同一套气泡 class 规则（parse_message_owner）给出 who。
+    data['owner'] = last.get('who') if last.get('who') in ('mine', 'friend') else 'unknown'
     data['side'] = {'mine':'me', 'friend':'them'}.get(data['owner'])
-    header = chat_dom.conversation_norm(data.get('header'))
-    names = [chat_dom.conversation_norm(row.get(k)) for k in ('brand', 'boss')]
-    if not any(len(n) >= 2 and n[:3] in header for n in names):
-        raise ValueError('unknown_conversation: header mismatch')
     # Snapshot time can supply a clock after DOM alone establishes ownership.
     if not data.get('ts') and row.get('last_ts'):
         data['ts'] = row['last_ts']
@@ -512,6 +429,12 @@ def scan_conv_states(cfg, br, tab, st, now=None, items=None):
         eligible = []
         for row in rows:
             prev = states.get(row['conv_key'], {})
+            if prev.get('ignored'):
+                # status-02：旧积压被一次性放弃；只有快照时间晚于放弃时的最后消息才恢复检查。
+                if row.get('last_ts', 0) > prev.get('ignored_last_ts', 0):
+                    prev.pop('ignored', None); prev.pop('ignored_last_ts', None); prev.pop('ignored_at', None)
+                else:
+                    continue
             # Snapshot msgTime advancing past the last check invalidates cooldown.
             if row.get('last_ts', 0) > prev.get('snapshot_msg_ts', prev.get('checked_ts', prev.get('last_ts', 0))):
                 prev.update(failures=0, retry_after_epoch=0)
@@ -640,117 +563,26 @@ def cmd_rejects(args):
     return 0
 
 
-def send_in_chat(br, tab, msg, marker, conv_key=None, cfg=None, cmd='auto_reply', job_id='', expected_history=None, new_turn=False, op_id=None, fact_context=None):
-    key = conv_key or br.__dict__.get('_boss_sessions', {}).get(tab)
-    if not key or not cfg:
-        return 'error: unknown_conversation'
-    before = chat_dom.active_conversation(br, tab)
-    if before.get('conv_key') != key:
-        return 'error: unknown_conversation'
-    if any(m.get('who') not in {'mine', 'friend'} for m in before.get('messages') or []):
-        return 'send_aborted:owner_unknown'
-    with state_lock(cfg['paths']['state'], reentrant=True):
-        ledger_guard(cfg, verify=lambda row: confirms_new_bubble(row, before))
-    trigger, operation = reply_operation(key, before.get('messages') or [], op_id)
-    if cmd == 'reply-to' and terminal_operation(cfg, operation):
-        return 'duplicate_op'
-    if cmd in {'reply-to', 'auto_reply'} and (before.get('messages') or [{}])[-1].get('who') == 'mine' and not new_turn:
-        return 'last_turn_is_ours'
-    if expected_history is not None and chat_dom.history_fingerprint(before.get('messages') or []) != chat_dom.history_fingerprint(expected_history):
-        return 'stale_draft'
-    binding_cfg = cfg
-    if fact_context is not None:
-        if (fact_context.get('conv_key') != key or fact_context.get('op_id') != operation
-                or fact_context.get('text_sha256') != hashlib.sha256(msg.encode()).hexdigest()
-                or fact_context.get('draft_fingerprint') != chat_dom.history_fingerprint(before.get('messages') or [])):
-            return 'stale_draft'
-        import copy
-        binding_cfg = copy.deepcopy(cfg)
-        binding_cfg.setdefault('user', {}).setdefault('greeting', {})['facts'] = list(fact_context['facts'])
-    good, reasons = R.check(msg, binding_cfg)
-    from message_policy import safe_interview_reply
-    if cmd == 'interview_reply':
-        if not safe_interview_reply(msg, cfg):
-            return 'manual_required'
-    elif R.commitment(msg):
-        return 'manual_required'
-    if cmd in {'auto_reply', 'reply-to'} and not good:
-        return 'manual_required'
-    send_meta = {}
-    def send():
-        f = CS.type_into_chat(br, tab, msg)
-        if f.get('ok') is not True:
-            return 'fill_err'
-        clicked = chat_dom.atomic_chat_click(br, tab, key, msg, chat_dom.normalized_history(before.get('messages') or []))
-        outcome = CS.click_outcome(clicked)
-        if outcome == 'aborted':
-            if clicked['reason'] == 'stale_draft':
-                return 'stale_draft'
-            return 'send_aborted:' + clicked['reason']
-        if outcome == 'clicked' and clicked.get('conv_key') != key:
-            return 'pending_verification'
-        send_meta['via'] = 'confirm_only' if outcome == 'pending' else clicked.get('via')
-        try:
-            confirmed = 'pending_verification'
-            for attempt in range(3 if outcome == 'pending' else 1):
-                time.sleep(2.0)
-                after = chat_dom.active_conversation(br, tab)
-                if after.get('conv_key') != key:
-                    break
-                confirmed = CS.confirm_new_bubble(
-                    [m.get('id') for m in before.get('messages') or []], after.get('messages') or [],
-                    hashlib.sha256(msg.encode()).hexdigest())
-                if confirmed == 'sent':
-                    break
-            HC.trace('after snapshot msgs=%d ids=%s' % (
-                len(after.get('messages') or []),
-                [m.get('id') for m in after.get('messages') or []][-3:]))
-            return 'replied' if confirmed == 'sent' else confirmed
-        except Exception as e:
-            HC.trace('confirm error: %r' % e)
-            return 'pending_verification'
-
-    return ledger_send(cfg, cmd, key, job_id, msg, send,
-                       {'meta': send_meta, 'trigger': trigger, 'op_id': operation if cmd == 'reply-to' else '',
-                        'message_seq': len(before.get('messages') or []) + 1,
-                        'msg_count': len(before.get('messages') or []),
-                        'last_message_id': (before.get('messages') or [{}])[-1].get('id') or '',
-                        'click_ts_epoch': int((cfg.get('_clock') or time.time)() * 1000),
-                        'reason': 'explicit_new_turn' if new_turn else 'inbound_reply',
-                        'draft_fingerprint': chat_dom.history_fingerprint(expected_history)
-                        if expected_history is not None else ''})
-
-
-def reply_in_chat(br, tab, brand, msg, marker, cfg=None, boss=None, job_id='', cmd='interview_reply', conv_key=None):
-    if not conv_key:
-        return 'error: unknown_conversation'
-    br.nav(tab, chat_dom.CHAT_URL, wait=5)
-    rows = chat_dom.conversation_rows(br, tab)
-    try:
-        target = chat_dom.select_conversation(rows, conv_key=conv_key)
-    except ValueError as exc:
-        return str(exc)
-    status, _, messages = chat_dom.open_by_index(br, tab, rows.index(target), conv_key=target['conv_key'])
-    if status != 'ok':
-        return status
-    if not messages:
-        return 'stale_draft'
-    last = messages[-1]
-    if cmd == 'interview_reply' and (last.get('who') != 'friend' or classify(last.get('text'), cfg) != 'interview'):
-        return 'stale_draft'
-    if cmd == 'followup' and last.get('who') != 'mine':
-        return 'stale_draft'
-    return send_in_chat(br, tab, msg, marker, target['conv_key'], cfg, cmd, job_id,
-                        expected_history=messages)
+def chat_interview_replied_keys(cfg):
+    """audit-01 Q2：对话模块已发过面试固定话术的会话键（读 conversations.json，只读）。"""
+    import conv_rules
+    import conv_store
+    path = os.path.join(cfg["paths"]["workdir"], "conversations.json")
+    if not os.path.exists(path):
+        return set()
+    reply = (cfg.get("user") or {}).get("interview_reply") or conv_rules.INTERVIEW_REPLY
+    return {key for key, row in conv_store.load(path).items()
+            if isinstance(row, dict) and reply in (row.get("sent_templates") or [])}
 
 
 def inbox(cfg, br, tab, st, out):
+    # audit-01 Q3：inbox 只读不发，有待核对的发送只提示、照常读（投递/对话的闸门不变）
+    pending_verification = None
     try:
         ledger_guard(cfg)
     except RuntimeError as exc:
-        out.append(str(exc))
-        return {'pending_verification': True, 'error': str(exc), 'auto_replied': [],
-                'replied_ok': [], 'followed_up': []}
+        pending_verification = str(exc)
+        out.append("⚠️ 有待核对的发送（投递/对话会暂停，先确认那个 HR 有没有收到消息）；收件箱照常只读")
     nav = br.nav(tab, "https://www.zhipin.com/web/geek/chat", wait=5)
     if cfg.get("_deadline") and nav and nav.get("isError"):
         raise RuntimeError("inbox_navigation_failed")
@@ -780,6 +612,12 @@ def inbox(cfg, br, tab, st, out):
         key = chat_dom.source_conversation_key(item)
         txt, ts = message_data(item)
         current = st.setdefault('conv_state', {}).get(key, {})
+        if current.get('ignored'):
+            if ts <= current.get('ignored_last_ts', 0):
+                ownership[jid] = None
+                continue  # status-02：旧积压没有新消息，不重新登记为待核对
+            current = {k: v for k, v in current.items() if k not in ('ignored', 'ignored_last_ts', 'ignored_at')}
+            st['conv_state'][key] = current
         side = {'mine':True, 'friend':False}.get(snapshot_message_owner(item))
         if (current.get('last_text') == txt and current.get('last_ts') == ts
                 and current.get('status') not in {'unknown','pending_verify'}
@@ -805,21 +643,19 @@ def inbox(cfg, br, tab, st, out):
         if any(counts.values()):
             out.append('待我回 %d ｜等对方 %d ｜超时 ≥%gh %d（详见 unanswered）' % (
                 counts['waiting_me'], counts['waiting_them'], float((cfg.get('inbox') or {}).get('stale_hours', 72)), counts['stale']))
-        return dict(status_scan=status_scan, unanswered=report, messages_total=len(items))
+        return dict(status_scan=status_scan, unanswered=report, messages_total=len(items),
+                    pending_verification=bool(pending_verification), pending_error=pending_verification)
     lookback = float((cfg.get("inbox") or {}).get("lookback_hours", 72))
     max_listed = int((cfg.get("inbox") or {}).get("max_listed", 5))
-    sys_pat = ((cfg.get("inbox") or {}).get("patterns") or {}).get("system") or \
-        r"附件简历.{0,20}已发送|已发送给对方|对方已同意|简历已收到|感谢投递|自动回复|系统消息|投递成功|您的附件简历"
     now_ms = int(time.time() * 1000)
     jobs = {j["encryptJobId"]: j for j in HF.load_jobs(cfg)}
-    sent_jids = st.get("sent") or {}
     verified_items = {j: dict(i, lastMessageInfo=dict(i.get('lastMessageInfo') or {},
         fromSelf=ownership[j])) for j,i in items.items() if ownership.get(j) is not None}
     rejects = collect_rejects(cfg, st, verified_items, jobs)
     st.setdefault("pending", {})
 
-    fresh_hits, interest, interviews, reply_cands, manual_reply = [], [], [], [], []
-    replied_ok, reply_failed, followed_up = [], [], []
+    fresh_hits, interest, interviews = [], [], []
+    chat_replied = chat_interview_replied_keys(cfg)
     n_fresh = 0
     owner_unknown = sum(v is None for v in ownership.values())
     for jid, it in items.items():
@@ -834,7 +670,7 @@ def inbox(cfg, br, tab, st, out):
             continue  # Already retained in conv_state as unknown, never dropped.
         n_fresh += 1
         txt = re.sub(r"\s+", " ", info.get("showText") or "").strip()
-        if re.search(sys_pat, txt):
+        if is_system_text(txt, cfg):
             continue
         job = jobs.get(jid) or {}
         verdict = HF.judge(job, cfg)[0] if job else "pass"
@@ -851,25 +687,27 @@ def inbox(cfg, br, tab, st, out):
             st["inbox_seen"].append(jid)
             fresh_hits.append((sc, who, meta))
         if label == "interview":
-            if jid not in st["replied"]:
+            if chat_dom.source_conversation_key(it) in chat_replied:
+                # 对话模块已回「请先给时段」，会话已转人工并置顶，这里不再记「待你确认」
+                if jid not in st["replied"]:
+                    st["replied"].append(jid)
+                st["pending"].pop(jid, None)
+            elif jid not in st["replied"]:
                 st["pending"][jid] = dict(meta, ts=HC.stamp(cfg))
             interviews.append((jid, it, who, meta))
         elif label == "reject":
             st["pending"].pop(jid, None)
         elif label == "interested" and verdict == "pass":
             interest.append((sc, who, meta))
-        if verdict == "pass" and label in ("interested", "other") and (it.get("brandName") or ""):
-            reply_cands.append((sc, who, dict(meta, ts=info.get("msgTime"))))
 
     fresh_hits.sort(key=lambda x: -x[0])
     interest.sort(key=lambda x: -x[0])
-    reply_cands.sort(key=lambda x: -(x[2].get("ts") or 0))   # 最新优先：DOM 只渲染前 ~20 个会话
     fresh_meta = [m for _, _, m in fresh_hits]
     interest_meta = [m for _, _, m in interest]
     fresh_hits = [w for _, w, _ in fresh_hits]
     interest = [w for _, w, _ in interest]
 
-    out.append("近 %d 小时新消息 %d 条（新招呼 %d）｜对口 %d｜感兴趣 %d｜约面试 %d"
+    out.append("近 %d 小时新消息 %d 条（列表 %d）｜对口 %d｜感兴趣 %d｜约面试 %d"
                % (int(lookback), n_fresh, len(items), len(fresh_hits), len(interest), len(interviews)))
     if fresh_hits:
         out.append("新增对口招呼：")
@@ -882,177 +720,14 @@ def inbox(cfg, br, tab, st, out):
         if len(interest) > max_listed:
             out.append("  · …另有 %d 个" % (len(interest) - max_listed))
 
-    ar = (cfg.get("inbox") or {}).get("auto_reply") or {}
-    auto_ok, auto_fail = [], []
-    auto_counts = dict(new_greet=0, open_failed=0, already_mine=0, owner_unknown=0)
-    if ar.get("enabled"):
-        cap = int(ar.get("daily_cap", 3))
-        today = HC.stamp(cfg, "%Y-%m-%d")
-        hist = st.setdefault("auto_replies", {})
-        used = ledger_count(cfg, {"auto_reply", "interview_reply", "followup"})
-        max_tries = int(ar.get("max_tries") or 8)
-        if not chat_dom.goto_tab(br, tab, chat_dom.NEW_GREET_TAB):
-            out.append("自动回话：切不到「新招呼」标签，跳过")
-        else:
-            texts = chat_dom.conversation_rows(br, tab)
-            auto_counts["new_greet"] = len(texts)
-            out.append("新招呼 %d 个｜今日已回 %d/%d" % (len(texts), used, cap))
-            if texts and not any(tx.get("conv_key") for tx in texts):
-                out.append("⚠️ 新招呼 %d 个但一个会话 ID 都读不出（页面结构可能已改版），自动回话跳过" % len(texts))
-            processed, tries = set(), 0
-            while used < cap and tries < max_tries:
-                HQ.check_deadline(cfg)
-                target = None
-                for i, tx in enumerate(texts):
-                    if tx.get("conv_key") and tx["conv_key"] not in processed:
-                        target = i
-                        break
-                if target is None:
-                    break
-                row = texts[target]
-                key = row["conv_key"]
-                processed.add(key)
-                tries += 1
-                stt, item, msgs = chat_dom.open_by_index(br, tab, target, conv_key=key)
-                if stt != "ok" or not msgs:
-                    HQ.check_deadline(cfg)
-                    stt, item, msgs = chat_dom.open_by_index(br, tab, target, conv_key=key)
-                if stt != "ok" or not msgs:
-                    auto_counts["open_failed"] += 1
-                    continue
-                if any(m.get('who') not in {'mine', 'friend'} for m in msgs):
-                    owner_unknown += 1
-                    auto_counts['owner_unknown'] += 1
-                    continue
-                item = chat_dom.clean_item(item)
-                if msgs[-1].get("who") == "mine":
-                    auto_counts["already_mine"] += 1
-                    continue                      # 最后一条是我发的，不用回
-                gr = R.generate(cfg, {"brandName": item}, "", log=out.append, history=msgs)
-                # 对方要简历：直接点 BOSS 自带的「发附件简历」，不要嘴上说「整理一下发您」
-                if gr.get("intent") == "resume":
-                    if ar.get("dry"):
-                        out.append("🧪 预演 [%s] → 发 BOSS 附件简历" % item[:16])
-                        used += 1
-                        continue
-                    cst = st.get("conv_state", {}).get(key, {})
-                    rres = CA.send_resume(br, tab, cfg, key,
-                                          cst.get("job_id") or ("tab:%s" % key))
-                    if rres in ("sent", "pending_verification"):
-                        used += 1
-                        # send_resume 自己写发送流水；这里不能再调 remember_reply
-                        # （它要求 ledger 里有 cmd='auto_resume' 的 sent 事件，否则抛 missing_confirmed_reply_event）
-                        HS.save_state(cfg, st)
-                        out.append("📎 发简历 [%s] → %s" % (item[:16], rres))
-                        if not chat_dom.goto_tab(br, tab, chat_dom.NEW_GREET_TAB):
-                            break
-                        texts = chat_dom.conversation_rows(br, tab)
-                        continue
-                    # 发简历失败：退回话术 + 待办，不能既没发出去又没吭声
-                    out.append("⚠️ 发简历 [%s] 失败(%s)，退回文字" % (item[:16], rres))
-                if not gr.get("text"):
-                    manual_reply.append({"brand": item[:26], "job_id": "tab:%s" % key,
-                                         "why": gr.get("reasons") or [],
-                                         "situation": H.categorize(msgs[-1].get("text") or ""),
-                                         "last": (msgs[-1].get("text") or "")[:60]})
-                    continue
-                if ar.get("dry"):
-                    auto_ok.append({"brand": item[:26], "reply": gr["text"],
-                                    "source": gr.get("source") + ":dry", "intent": gr.get("intent")})
-                    out.append("🧪 预演 [%s] → %s" % (item[:16], gr["text"]))
-                    used += 1
-                    continue
-                context = gr.get('fact_context')
-                if context:
-                    context = dict(context, conv_key=key, op_id=reply_operation(key, msgs)[1],
-                                   draft_fingerprint=chat_dom.history_fingerprint(msgs))
-                res = send_in_chat(br, tab, gr["text"], gr["text"][:6], key, cfg, expected_history=msgs,
-                                   fact_context=context)
-                if res == "replied":
-                    used += 1
-                    HS.remember_reply(cfg, st, key, 'auto_reply', {
-                        'source': gr.get('source'), 'item': item[:40],
-                        'hr': (msgs[-1].get('text') or '')[:80]})
-                    if gr.get('intent') == 'resume':
-                        current = st.get('conv_state', {}).get(key, {})
-                        job = jobs.get(current.get('job_id')) or {}
-                        followup = {
-                            'ts': HC.stamp(cfg), 'conv_key': key,
-                            'brand': row.get('brand') or current.get('brand') or '',
-                            'boss': row.get('boss') or current.get('boss') or '',
-                            'job': row.get('title') or current.get('title') or job.get('jobName') or '',
-                            'reply': gr['text'],
-                        }
-                        st['resume_followups'] = ([r for r in st.get('resume_followups', [])
-                                                   if r.get('conv_key') != key] + [followup])[-30:]
-                    HS.save_state(cfg, st)
-                    auto_ok.append({"brand": item[:26], "reply": gr["text"],
-                                    "source": gr.get("source"), "intent": gr.get("intent")})
-                    out.append("💬 回 [%s] → %s" % (item[:16], gr["text"]))
-                    if not chat_dom.goto_tab(br, tab, chat_dom.NEW_GREET_TAB):   # 会话已移出该标签，重读
-                        break
-                    texts = chat_dom.conversation_rows(br, tab)
-                else:
-                    auto_fail.append({"brand": item[:26], "error": res})
-                    out.append("⚠️ 回 [%s] 失败(%s)" % (item[:16], res))
-    if auto_counts["new_greet"] > 0:
-        out.append("自动回话：新招呼 %d 个｜回 %d｜需人工 %d｜打开失败 %d｜我最后说过 %d｜归属不明 %d" % (
-            auto_counts["new_greet"], len(auto_ok), len(manual_reply),
-            auto_counts["open_failed"], auto_counts["already_mine"], auto_counts["owner_unknown"]))
-    if manual_reply:
-        out.append("需人工回（%d）：" % len(manual_reply))
-        for n, m in enumerate(manual_reply[:int((cfg.get("inbox") or {}).get("max_listed", 5))], 1):
-            out.append("  %d. %s｜%s｜%s" % (n, m.get("situation") or "?",
-                                            (m.get("brand") or "")[:20],
-                                            (m.get("last") or m.get("text") or "")[:38]))
-    if (cfg.get("inbox") or {}).get("interview_auto_reply", True):
-        reply = (cfg.get("user") or {}).get("interview_reply") or INTERVIEW_DEFAULT
-        marker = "面试" if "面试" in reply else reply[:6]
-        for jid, it, who, meta in interviews:
-            if jid in st["replied"]:
-                continue
-            res = reply_in_chat(br, tab, it.get("brandName") or "", reply, marker, cfg, it.get("name"), jid,
-                                conv_key=chat_dom.source_conversation_key(it))
-            if res == "replied":
-                HS.remember_reply(cfg, st, chat_dom.source_conversation_key(it), 'interview_reply')
-                st["replied"].append(jid)
-                st["pending"].pop(jid, None)
-                out.append("📅 约面试 %s → 已回「先给时段，我确认后再答复」" % who)
-                HS.save_state(cfg, st)
-                replied_ok.append(meta)
-            else:
-                out.append("⚠️ 约面试 %s → 回复失败(%s)，请手工回" % (who, res))
-                reply_failed.append(dict(meta, error=res))
-
-    fu = (cfg.get("inbox") or {}).get("followup") or {}
-    if fu.get("enabled"):
-        hours = float(fu.get("after_hours", 48))
-        text = (cfg.get("user") or {}).get("followup_template") or \
-               "您好，之前给您发过消息，想确认下这个岗位还在招吗？我这边随时可以聊。"
-        for jid, it in items.items():
-            if jid not in sent_jids or jid in st["followed"]:
-                continue
-            info = it.get("lastMessageInfo") or {}
-            ts = info.get("msgTime") or 0
-            if not ts or (now_ms - ts) < hours * 3600 * 1000:
-                continue
-            if ownership.get(jid) is not True:
-                continue  # 对方已回或归属不明，不需要跟进
-            res = reply_in_chat(br, tab, it.get("brandName") or "", text, text[:6], cfg, it.get("name"), jid, "followup",
-                                conv_key=chat_dom.source_conversation_key(it))
-            if res == "replied":
-                HS.remember_reply(cfg, st, chat_dom.source_conversation_key(it), 'followup')
-                st["followed"].append(jid)
-                HS.save_state(cfg, st)
-            out.append("🔁 跟进 %s → %s" % (it.get("brandName") or "?", res))
-            followed_up.append({"job_id": jid, "brand": it.get("brandName"), "result": res})
     report = unanswered_report(st, hours=float((cfg.get('inbox') or {}).get('stale_hours', 72)))
     counts = report['counts']
-    out.append('待核对 %d（unanswered --unknown）' % counts['unknown'])
     if any(counts.values()):
         out.append('待我回 %d ｜等对方 %d ｜超时 ≥%gh %d（详见 unanswered）' % (
             counts['waiting_me'], counts['waiting_them'], float((cfg.get('inbox') or {}).get('stale_hours', 72)), counts['stale']))
     return {
+        "pending_verification": bool(pending_verification),
+        "pending_error": pending_verification,
         "status_scan": status_scan,
         "unanswered": report, "owner_unknown": owner_unknown,
         "window_hours": int(lookback),
@@ -1062,13 +737,14 @@ def inbox(cfg, br, tab, st, out):
         "interest": interest_meta,
         "interviews": [dict(m, replied=(jid in st["replied"]))
                        for jid, it, who, m in interviews],
-        "replied_ok": replied_ok,
-        "auto_reply_counts": dict(auto_counts, replied=len(auto_ok), manual=len(manual_reply)),
-        "auto_replied": auto_ok,
-        "auto_failed": auto_fail,
-        "manual_reply": manual_reply,
-        "reply_failed": reply_failed,
-        "followed_up": followed_up,
+        # 旧回消息链路已移除（cleanup-02），以下键为兼容播报脚本保留，恒为空。
+        "replied_ok": [],
+        "auto_reply_counts": dict.fromkeys(LEGACY_REPLY_COUNTS, 0),
+        "auto_replied": [],
+        "auto_failed": [],
+        "manual_reply": [],
+        "reply_failed": [],
+        "followed_up": [],
         "rejects_total": len(rejects),
         "unread_semantics": "打开消息页会清零未读；本条按招呼语文本/时间比对判定",
     }
@@ -1077,6 +753,11 @@ def inbox(cfg, br, tab, st, out):
 # --------------------------------------------------------------------------
 # 子命令
 # --------------------------------------------------------------------------
+def conn_lines(bridge, ext):
+    """runs.log 头两行：连上后要用真实结果覆盖（audit-01 #1，此前恒为空）。"""
+    return ["bridge:%s" % bridge, "extension:%s" % ext]
+
+
 def emit(cfg, lines, quiet=False):
     head = "【%s %s】" % (HC.stamp(cfg), HC.cfg_tz(cfg).key.split("/")[-1])
     block = head + "\n" + "\n".join("- " + str(x) for x in lines)
@@ -1151,6 +832,7 @@ def cmd_validate(args):
             print("❌ " + str(exc))
         return 1
     errs, warns = HQ.validate_cfg(cfg)
+    warns.extend(legacy_reply_warnings(cfg))
     if not errs:
         try:
             rows = grades_by_src(cfg, HS.load_state(cfg), HF.load_jobs(cfg))
@@ -1517,14 +1199,15 @@ def cmd_greet(args):
                      "chars": len(gr.get("text") or ""), "attempts": gr.get("attempts"),
                      "secs": gr.get("secs"), "gate_ok": ok, "gate_reasons": reasons,
                      "fallback_reason": gr.get("fallback_reason")})
+    ok_flag = bool(runs and runs[0]["text"]) and up  # audit-01 Q6：没做成就返回 1，Hermes/harness 才看得到失败
     if want_json(args):
-        emit_json({"cmd": "greet", "ok": bool(runs and runs[0]["text"]) and up,
+        emit_json({"cmd": "greet", "ok": ok_flag,
                    "job_id": job.get("encryptJobId"), "title": job.get("jobName"),
                    "brand": job.get("brandName"), "jd_source": jd_source,
                    "jd_chars": len(jd), "ollama": msg, "greet": G.describe(cfg, job),
                    "marker": O.verify_marker(cfg, job, runs[0]["text"] if runs else ""),
                    "runs": runs})
-        return 0
+        return 0 if ok_flag else 1
     print("岗位：%s｜%s｜%s" % (job.get("jobName"), job.get("brandName"),
                              job.get("salaryDesc") or ""))
     print("招呼语：%s（Ollama %s；JD 来源 %s，%d 字）"
@@ -1548,28 +1231,28 @@ def cmd_template(args):
     job = {"jobName": args.job_name or "示例岗位", "brandName": args.brand or "示例公司",
            "cityName": args.city or "示例城市"}
     text = O.render((cfg.get("user") or {}).get("greeting_template") or "", cfg, job)
+    ok_flag = bool(0 < len(text) <= 380)  # audit-01 Q6：没做成就返回 1，Hermes/harness 才看得到失败
     if want_json(args):
-        emit_json({"cmd": "template", "ok": 0 < len(text) <= 380, "text": text,
+        emit_json({"cmd": "template", "ok": ok_flag, "text": text,
                    "chars": len(text), "marker": O.verify_marker(cfg, job),
                    "recommended_chars": [80, 200], "hard_max": 380})
-        return 0
+        return 0 if ok_flag else 1
     print(text)
     print("\n--- 校验标记：%r（发送后必须在弹窗里出现）" % O.verify_marker(cfg, job))
     print("字数：%d（建议 80–200 字；>380 会被拦）" % len(text))
-    return 0
-
-
+    return 0 if ok_flag else 1
 
 
 def cmd_login(args):
     cfg = HC.load_config(HC.config_path(args))
     br = CM.Browser(cfg)
     bridge, ext = "", ""
-    lines = ["bridge:%s" % bridge, "extension:%s" % ext]
+    lines = conn_lines(bridge, ext)
     logged, url, closed = False, "", 0
     try:
         bridge = br.connect()
         ext = br.wake
+        lines[:2] = conn_lines(bridge, ext)
         tab, stt = O.check_login(br, cfg)
         url = stt.get("url", "")
         lines.append("页面：%s" % url)
@@ -1583,19 +1266,20 @@ def cmd_login(args):
     finally:
         closed = O.cleanup_browser(br)
         lines.append("已关自己开的标签页 %d 个" % closed)
+    ok_flag = bool(logged)  # audit-01 Q6：没做成就返回 1，Hermes/harness 才看得到失败
     if want_json(args):
-        emit_json({"cmd": "login-check", "ok": logged, "logged": logged, "bridge": bridge,
+        emit_json({"cmd": "login-check", "ok": ok_flag, "logged": logged, "bridge": bridge,
                    "extension": ext, "url": url, "tabs_closed": closed}, cfg, lines)
-        return 0
+        return 0 if ok_flag else 1
     emit(cfg, lines)
-    return 0
+    return 0 if ok_flag else 1
 
 
 def cmd_preflight(args):
     cfg = HC.load_config(HC.config_path(args))
     br = CM.Browser(cfg)
     bridge, ext = "", ""
-    lines = ["bridge:%s" % bridge, "extension:%s" % ext]
+    lines = conn_lines(bridge, ext)
     logged, gs, closed = False, "", 0
     cap = int((cfg.get("sending") or {}).get("daily_cap") or 0)
     day_count = None
@@ -1604,6 +1288,7 @@ def cmd_preflight(args):
     try:
         bridge = br.connect()
         ext = br.wake
+        lines[:2] = conn_lines(bridge, ext)
         tab, stt = O.check_login(br, cfg)
         logged = bool(stt.get("avatar")) and not stt.get("login")
         lines.append("登录：%s" % ("ok" if logged else "未确认/未登录"))
@@ -1617,29 +1302,31 @@ def cmd_preflight(args):
     finally:
         closed = O.cleanup_browser(br)
         lines.append("已关自己开的标签页 %d 个" % closed)
+    ok_flag = bool(logged and gs == "auto_greeting_off" and greet_ok)  # audit-01 Q6：没做成就返回 1，Hermes/harness 才看得到失败
     if want_json(args):
-        emit_json({"cmd": "preflight", "ok": logged and gs == "auto_greeting_off" and greet_ok,
+        emit_json({"cmd": "preflight", "ok": ok_flag,
                    "logged": logged, "greeting_switch": gs, "day_count": day_count,
                    "daily_cap": cap, "bridge": bridge, "extension": ext,
                    "greet_mode": G.block(cfg).get("mode"), "greet_llm": greet_msg,
                    "greet_ok": greet_ok,
                    "manual_action": "请手动确认招呼语开关已关闭" if gs != "auto_greeting_off" else "",
                    "tabs_closed": closed}, cfg, lines)
-        return 0
+        return 0 if ok_flag else 1
     emit(cfg, lines)
-    return 0
+    return 0 if ok_flag else 1
 
 
 def cmd_scan(args):
     cfg = HC.load_config(HC.config_path(args))
     br = CM.Browser(cfg)
     bridge, ext = "", ""
-    lines = ["bridge:%s" % bridge, "extension:%s" % ext]
+    lines = conn_lines(bridge, ext)
     saved, errs, closed = 0, [], 0
     jobs, cs = [], []
     try:
         bridge = br.connect()
         ext = br.wake
+        lines[:2] = conn_lines(bridge, ext)
         saved, errs = O.scan(cfg, br, targets=args.target, keywords=args.keyword,
                            pages=args.pages)
         lines.append("抓取 %d 页响应" % saved)
@@ -1652,15 +1339,16 @@ def cmd_scan(args):
     finally:
         closed = O.cleanup_browser(br)
         lines.append("已关自己开的标签页 %d 个" % closed)
+    ok_flag = bool(saved > 0)  # audit-01 Q6：没做成就返回 1，Hermes/harness 才看得到失败
     if want_json(args):
-        emit_json({"cmd": "scan", "ok": saved > 0, "pages_saved": saved, "errors": errs,
+        emit_json({"cmd": "scan", "ok": ok_flag, "pages_saved": saved, "errors": errs,
                    "jobs_total": len(jobs), "candidates": len(cs),
                    "grade_a": sum(1 for x in cs if x["grade"].rstrip("?") == "A"),
                    "grade_b": sum(1 for x in cs if x["grade"].rstrip("?") == "B"),
                    "bridge": bridge, "extension": ext, "tabs_closed": closed}, cfg, lines)
-        return 0
+        return 0 if ok_flag else 1
     emit(cfg, lines)
-    return 0
+    return 0 if ok_flag else 1
 
 
 def cmd_plan(args):
@@ -1706,20 +1394,6 @@ def cmd_plan(args):
     return 0
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def run_tick(cfg, st, now, out):
     key = None
     cfg.pop("_contact_last_sent_cache", None)
@@ -1758,7 +1432,7 @@ def run_tick(cfg, st, now, out):
             out.append("不在窗口，跳过")
             return data
         key = now.strftime("%Y-%m-%d") + " " + (catch_up or plan["window"])
-        ledger_guard(cfg)
+        ledger_guard(cfg, scope='outbound')
         HS.migrate_ledger(cfg, st)
         if key in st.get("ticks_done", []):
             out.append("本窗口已完成，跳过")
@@ -1853,17 +1527,11 @@ def cmd_tick(args):
     out = ["这跳做 %s（%s %s）" % ("/".join(plan["actions"]) or "不在窗口，跳过", plan["now"], plan["timezone"])]
     if args.dry_run:
         st = HS.load_state(cfg)
-        sending = cfg.get("sending") or {}
-        budget = max(0, int(sending.get("daily_cap") or 0) - st["day_count"])
-        modern = HF.grading_enabled(cfg) or "grade_quota" in sending
-        quotas = HQ.quotas_for_now(cfg, st, now) if modern else HQ.grade_limits(cfg)
-        if modern:
-            budget = min(budget, max(0, int(sending.get("max_per_window", 8))))
-        if not modern or not sending.get("carry_over", "grade_quota" in sending):
-            budget = min(budget, max(0, int((cfg.get("schedule") or {}).get("per_window") or 0)))
-        if modern:
-            quotas = HQ.shrink_quotas(quotas, budget)
-        budget = min(budget, sum(quotas.values())) if "send" in plan["actions"] else 0
+        budget, quotas = O.send_budget(cfg, st, now)
+        if "send" in plan["actions"]:
+            budget = min(budget, sum(quotas.values()))
+        else:  # 窗口外不投递：预算与配额一并报 0（audit-01 #10）
+            budget, quotas = 0, {k: 0 for k in quotas}
         data = dict(plan, cmd="tick", ok=True, dry_run=True, budget={"limit": budget, "same_hr_window_days": (cfg.get("filters") or {}).get("same_hr_window_days")}, quotas=quotas)
         # dry-run 只读 state/ledger，不写日志、不创建浏览器或锁。
         if want_json(args):
@@ -1891,7 +1559,7 @@ def cmd_send(args):
     st = HS.load_state(cfg)
     br = CM.Browser(cfg)
     bridge, ext = "", ""
-    out = ["bridge:%s" % bridge, "extension:%s" % ext]
+    out = conn_lines(bridge, ext)
     tab = None
     closed = 0
     res = {"sent": 0, "day_count": st.get("day_count"),
@@ -1900,6 +1568,7 @@ def cmd_send(args):
     try:
         bridge = br.connect()
         ext = br.wake
+        out[:2] = conn_lines(bridge, ext)
         first = (cfg.get("targets") or [{}])[0]
         tab = br.new_tab("https://www.zhipin.com/web/geek/jobs?city=%s"
                          % str(first.get("city_code") or ""))
@@ -1910,7 +1579,7 @@ def cmd_send(args):
         out.append("已关自己开的标签页 %d 个" % closed)
         HS.save_state(cfg, st)
     if want_json(args):
-        emit_json(dict(res, cmd="send", ts=HC.stamp(cfg), bridge=bridge, extension=ext,
+        emit_json(dict(res, cmd="send", ok=True, ts=HC.stamp(cfg), bridge=bridge, extension=ext,
                        tabs_closed=closed), cfg, out)
         return 0
     emit(cfg, out)
@@ -1930,6 +1599,10 @@ def cmd_chat(args):
                 HC.now_local(cfg).hour not in options.get('hours', list(range(9, 22)))):
             data = conversation.run(cfg, br, out, dry=args.dry)
         else:
+            # audit-01 Q5：对话跳也先校验对话相关配置（conversation 段与正则），有错不连浏览器
+            errs = HQ.conversation_errors(cfg)
+            if errs:
+                raise RuntimeError('config_invalid: ' + '；'.join(errs))
             br.connect()
             _, login = O.check_login(br, cfg)
             if login.get('login') or not login.get('avatar'):
@@ -1954,12 +1627,13 @@ def cmd_inbox(args):
     st = HS.load_state(cfg)
     br = CM.Browser(cfg)
     bridge, ext = "", ""
-    out = ["bridge:%s" % bridge, "extension:%s" % ext]
+    out = conn_lines(bridge, ext)
     tab = None
     data, closed = {}, 0
     try:
         bridge = br.connect()
         ext = br.wake
+        out[:2] = conn_lines(bridge, ext)
         tab = br.new_tab("https://www.zhipin.com/web/geek/chat")
         time.sleep(4)
         data = inbox(cfg, br, tab, st, out)
@@ -1968,8 +1642,8 @@ def cmd_inbox(args):
         out.append("已关自己开的标签页 %d 个" % closed)
         HS.save_state(cfg, st)
     if want_json(args):
-        emit_json(dict(data, cmd="inbox", ts=HC.stamp(cfg), bridge=bridge, extension=ext,
-                       tabs_closed=closed, resume_followups=st.get('resume_followups', [])), cfg, out)
+        emit_json(dict(data, cmd="inbox", ok=True, ts=HC.stamp(cfg), bridge=bridge, extension=ext,
+                       tabs_closed=closed), cfg, out)
         return 0
     emit(cfg, out)
     return 0
@@ -1981,13 +1655,14 @@ def cmd_run(args):
     st = HS.load_state(cfg)
     br = CM.Browser(cfg)
     bridge, ext = "", ""
-    out = ["bridge:%s" % bridge, "extension:%s" % ext]
+    out = conn_lines(bridge, ext)
     tab = None
     cs, closed = [], 0
     scan_res, send_res, inbox_res = {"pages_saved": 0, "errors": []}, None, None
     try:
         bridge = br.connect()
         ext = br.wake
+        out[:2] = conn_lines(bridge, ext)
         scan_out = O.scan(cfg, br, pages=args.pages)
         scan_res = {"pages_saved": scan_out[0], "errors": scan_out[1]}
         out.append("scan: +%d 页%s" % (scan_out[0], (" ⚠️ " + ",".join(scan_out[1])) if scan_out[1] else ""))
@@ -2145,25 +1820,6 @@ def build_parser():
     add_json_flag(p)
     p.set_defaults(func=cmd_greet)
 
-    p = sub.add_parser("reply-to", help="按你给的意思回某个会话（并记录话术）")
-    p.add_argument("target", help="新招呼列表里的公司名/HR 名片段")
-    p.add_argument("--brief", required=True, help="你想表达的意思（不用写成成品）")
-    p.add_argument('--force', action='store_true', help='按指定主题回答（仍检查轮次）')
-    p.add_argument('--new-turn', action='store_true', help='明确追加一条新消息（仍按 op-id 去重）')
-    p.add_argument('--op-id', help='人工回复操作标识；重试使用相同标识')
-    p.add_argument("--dry", action="store_true", help="只预览不发送")
-    add_json_flag(p)
-    p.set_defaults(func=cmd_reply_to)
-
-    p = sub.add_parser("human-compact", help="合并人工话术（不需要浏览器）")
-    p.add_argument("--dry", action="store_true", help="只预览不写文件")
-    add_json_flag(p)
-    p.set_defaults(func=cmd_human_compact)
-
-    p = sub.add_parser("human-stats", help="看已沉淀的人工话术")
-    add_json_flag(p)
-    p.set_defaults(func=cmd_human_stats)
-
     p = sub.add_parser("login-check", help="只读确认登录态")
     add_json_flag(p)
     p.set_defaults(func=cmd_login)
@@ -2248,130 +1904,20 @@ def build_parser():
     return ap
 
 
-@locked_command
-def cmd_reply_to(args):
-    """按本次人工确认要点生成并发送；要点不持久化为学习事实。
-
-    用法：boss_hunt.py reply-to 示例公司 --brief "简单说某平台BDM，带6人，新签80+家" [--dry]
-    """
-    cfg = HC.load_config(HC.config_path(args))
-    st = HS.load_state(cfg)
-    br = CM.Browser(cfg)
-    bridge = ""
-    out = []
-    try:
-        bridge = br.connect()
-        ext = br.wake
-        tab = br.new_tab(chat_dom.CHAT_URL)
-        time.sleep(5)
-        if not chat_dom.goto_tab(br, tab, chat_dom.NEW_GREET_TAB):
-            out.append("切不到「新招呼」标签")
-            emit(cfg, out)
-            return 2
-        rows = chat_dom.conversation_rows(br, tab)
-        try:
-            target = chat_dom.select_conversation(rows, args.target)
-        except ValueError as exc:
-            out.append(str(exc))
-            emit(cfg, out)
-            return 2
-        key = target['conv_key']
-        stt, item, msgs = chat_dom.open_by_index(br, tab, rows.index(target), conv_key=key)
-        item = chat_dom.clean_item(item)
-        if stt != "ok" or not msgs:
-            out.append("会话打不开(%s)：%s" % (stt, item))
-            emit(cfg, out)
-            return 2
-        hr_text = msgs[-1].get("text") if msgs else ""
-        trigger, operation = reply_operation(key, msgs, args.op_id)
-        previous = terminal_operation(cfg, operation)
-        if previous:
-            if previous['status'] == 'sent':
-                HS.remember_reply(cfg, st, key, 'reply-to')
-                HS.save_state(cfg, st)
-            if want_json(args):
-                emit_json({'cmd': 'reply-to', 'ok': True, 'result': 'duplicate_op', 'op_id': operation})
-            else:
-                out.append('duplicate_op: ' + operation)
-                emit(cfg, out)
-            return 0
-        gr = R.generate(cfg, {"brandName": item}, args.brief, log=out.append,
-                        history=msgs, force=True, new_turn=args.new_turn)
-        draft = gr.get("text") or ""
-        if not draft:
-            out.append("按要点写不出合格的回复：%s" % "、".join(gr.get("reasons") or []))
-            emit(cfg, out)
-            return 2
-        out.append("对象：%s" % item)
-        out.append("HR 说：%s" % (hr_text or "")[:80])
-        out.append("你的意思：%s" % args.brief)
-        out.append("要发的话：%s" % draft)
-        if args.dry:
-            out.append("（预演，未发送）")
-            emit(cfg, out)
-            return 0
-        res = send_in_chat(br, tab, draft, draft[:6], key, cfg, "reply-to", expected_history=msgs,
-                           new_turn=args.new_turn, op_id=operation,
-                           fact_context=dict(gr['fact_context'], conv_key=key, op_id=operation,
-                                             draft_fingerprint=chat_dom.history_fingerprint(msgs)) if gr.get('fact_context') else None)
-        ok = (res == "replied")
-        sit = H.categorize(hr_text)
-        if ok:
-            HS.remember_reply(cfg, st, key, 'reply-to', {
-                'source': 'human:' + sit, 'item': item, 'hr': (hr_text or '')[:80]})
-            HS.save_state(cfg, st)
-            out.append("✅ 已发出（归类：%s，本次要点仅用于本次操作）" % sit)
-        else:
-            out.append("⚠️ 发送失败(%s)，请核对结果后再处理" % res)
-        emit(cfg, out)
-        return 0 if ok else 1
-    finally:
-        O.cleanup_browser(br)
-
-
-def cmd_human_compact(args):
-    cfg = HC.load_config(HC.config_path(args))
-    try:
-        result = H.compact(cfg, dry=args.dry)
-    except H.HumanStoreError as exc:
-        if want_json(args):
-            emit_json({'cmd': 'human-compact', 'ok': False, 'error': str(exc)})
-        else:
-            print(str(exc), file=sys.stderr)
-        return 1
-    if want_json(args):
-        emit_json(dict(result, cmd="human-compact", ok=True))
-    else:
-        for item in result["items"]:
-            print("%s：before=%d → after=%d method=%s" % (
-                item["situation"], item["before"], item["after"], item["method"]))
-        print("model_calls=%d max_model_calls=%d dry=%s" % (
-            result["model_calls"], result["max_model_calls"], args.dry))
-    return 0
-
-
-def cmd_human_stats(args):
-    cfg = HC.load_config(HC.config_path(args))
-    rows = H.stats(cfg)
-    if want_json(args):
-        emit_json({"cmd": "human-stats", "ok": True,
-                   "hints": [{"situation": s, "count": c, "last": l, "brief": b}
-                             for s, c, l, b in rows]})
-        return 0
-    if not rows:
-        print("还没有人工介入记录。用 reply-to 回一次就会积累。")
-        return 0
-    for s, c, l, b in rows:
-        print("%s ×%d（%s） 要点：%s" % (s, c, l, b[:60].replace("\n", " ").replace("\r", " ")))
-    return 0
-
-
 def main():
     ap = build_parser()
     args = ap.parse_args()
     if not getattr(args, "func", None):
         ap.print_help()
         return 2
+    path = HC.config_path(args)
+    if args.cmd != "init" and not os.path.exists(path):
+        # audit-01 #14：原先直接抛 FileNotFoundError 堆栈，--json 也不出 JSON
+        if want_json(args):
+            emit_json({"cmd": args.cmd, "ok": False, "error": "config_not_found", "config": path})
+        else:
+            print("配置文件不存在：%s（先跑 `boss_hunt.py init`，或用 --config 指定）" % path, file=sys.stderr)
+        return 1
     return args.func(args)
 
 

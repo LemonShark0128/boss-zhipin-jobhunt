@@ -1,22 +1,62 @@
-## 2026-10-27 · Phase A 验收修正
-
-- **修复**：`do_send` 每跳把整池候选逐个读 JD（实测 652 次/跳），定时任务会被超时杀掉。
-  改为：粗标 C 直接跳过（不打开详情页）+ 单跳 JD 读取上限 `max_inspect_per_window`（默认 24）。
-- **修复**：A 配额满后仍会为粗标 A? 的候选无限读 JD。改为 `hidden_b_probe`（默认 6）限额探测
-  「自报互联网、实则门店运营」的隐藏 B，其余跳过。
-- **修复**：`b_pool` 里的旧候选被粗标 C 误杀（粗标只看列表字段，不能否掉已按 JD 定级的 B）。
-- **修复**：额度耗尽时 `do_send` 的返回结构缺 `quotas` 字段。
-- **移除**：海外岗位押配额逻辑（`sending.overseas_regex` / `overseas_max_per_round`）—— 实测不好用，
-  且不适合公开技能；要投海外方向改为在 `filters.title_hard_block` 里排除工程外派岗。
-- **测试**：`tests/test_phase_a.py` 的配额用例给 B 类岗位补上品牌侧行业（原写法 45 个岗位行业全同，
-  等于假设行业字段完全不可信），27 项单测全绿。
-
 # 变更记录
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)；格式参考
 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
 ## [Unreleased]
+
+## [0.3.0] - 2026-11-06
+
+### 变更 · 收件箱只读（破坏性）
+- `inbox` 只读不发：只做分类与播报，不再自动回话、跟进或发简历；回 HR 与发简历只走对话模块 `chat`。
+- 移除旧回话链路：`scripts/reply.py`、`scripts/human.py`、`scripts/reply_eval.py` 与 `reply-to` 等子命令，
+  以及 `inbox.auto_reply` / `inbox.followup` / `interview_auto_reply` 配置项。旧 JSON 字段
+  （`replied_ok` / `auto_replied` 等）恒为空，仅为兼容保留。
+- `init` 生成的配置不再写死数据目录和简历回执正则：数据目录跟随配置文件位置，回执正则走代码默认值。
+
+### 新增 · 对话模块
+- 需人工会话可自动在 BOSS 置顶（`conversation.pin_manual`，默认关），用户取消置顶即视为处理完；
+  已处理的会话又来新的 HR 消息时提醒一次并重新置顶，取消置顶之前的消息算看过。
+- 遵守 `filters.brand_block`：屏蔽公司的会话不打开、不揭示、不占名额，转人工推一次。
+- 减少需人工：冷招呼按招呼流程走、确认语静等；在职状态与意向城市内的工作地点自动答一次
+  （调动 / 外派 / 出差仍转人工）；红线补「互换电话」「离职原因」。
+- 会话状态支持一次性放弃旧积压（`ignored`），有新消息自动恢复；会话身份改用 `conv_key` 校验。
+- 对话候选改最旧优先，列表 40 行外只揭示本跳轮到的会话；40 行外的拒信直接结束、不占推送名额。
+
+### 新增 · 定时与播报
+- 回消息跳的 wrapper 与播报收进仓库：`scripts/cron/boss-hunt-inbox.sh` / `boss-hunt-inbox-fmt.py`，
+  与投递跳、对话跳共用同一把 flock；播报去掉旧链路恒为 0 的「已回 / 失败」。
+- 投递播报的「今日已发」改为一行一条「公司 ｜ 职位」，去掉等级字母；待核对提示改成人话。
+
+### 变更 · 投递模块
+- 发送账本未核实按会话隔离：对话模块的挂起只停它自己的会话，投递与其他会话照常。
+- `tick --dry-run` 与真实投递共用同一套本跳预算 / 配额计算；窗口外干跑把各级配额也报 0。
+- 开场白、承接句、答句与发送闸门拒绝自我否定句（「无…经验」「缺乏…背景」），不误伤「无责底薪」。
+
+### 变更 · 安全、配置与命令行
+- 收件箱不再被发送账本的待核对挡住：只提示一行、照常只读；投递与对话的闸门不变。
+- 收件箱的拒信 / 系统消息判定与对话模块统一（`inbox.patterns` 显式覆盖仍生效）；
+  对话模块回过面试固定话术的会话不再记「待你确认」。
+- `sending.min_gap_seconds` 未写时投递、对话、账本闸门统一按 60 秒。
+- `validate` 检查配置里的正则能否编译；`chat` 启动前先校验对话相关配置，有错不连浏览器。
+- `ok=false` 时退出码为 1（`login-check` / `preflight` / `scan` / `greet` / `template`）；
+  `send` / `inbox` JSON 带 `ok`，`unanswered --json` 带 `schema` / `cmd`。
+- 模型 key 依次从环境变量、`llm.env_file` / `$BOSS_HUNT_ENV_FILE`、`~/.boss-hunt/.env` 读（Hermes 的 `.env` 兼容）。
+- JD 读取抽成 `scripts/jd_page.py`，对话模块不再依赖投递模块。
+
+### 修复
+- 瞬时失败先重试一次：开标签、登录态检查、详情页导航（登录墙不重试）；招呼语开关读不到时同页等待重读，最多 3 次。
+- 推送原话去掉 BOSS 的 `<copy>` 标记（含转义与截断残片）。
+- 置顶改用页面自身接口并回查 DOM 确认。
+- `dump_conversations.py` 从自身目录导入（不再依赖固定安装路径），消息时间按配置时区。
+- 发简历诊断文件与招呼语缓存的时间按配置时区写；`greet` 的 `temperature=0` 原样传给模型。
+- 配置文件不存在时给提示（`--json` 输出 `config_not_found`），不再抛堆栈。
+- `runs.log` 头两行写真实的桥 / 扩展连接结果；收件箱概览括号里的数改叫「列表」；
+  不再每跳重复打印「待核对 N」（计数仍在 JSON 里）。
+
+### 移除
+- 零调用方的死代码与只剩测试引用的旧函数（如 `quota_for_now`，统一用 `quotas_for_now`）。
+- 发送闸门里旧 `auto_reply` / `interview_reply` / `followup` 的额度与去重分支。
 
 ## [0.2.0] - 2026-11-05
 
@@ -37,6 +77,11 @@
 
 
 ### 修复 · 首条招呼真机发送（2026-10-28）
+### 修复 · 分级投递验收（2026-10-27）
+- `do_send` 不再每跳把整池候选逐个读 JD：粗标 C 直接跳过，单跳 JD 读取上限 `max_inspect_per_window`（默认 24）。
+- A 配额满后不再为粗标 A? 无限读 JD：改为 `hidden_b_probe`（默认 6）限额探测隐藏 B。
+- `b_pool` 里的旧候选不再被粗标 C 误杀；额度耗尽时 `do_send` 的返回结构补上 `quotas` 字段。
+
 
 - **根因 1（输入）**：`type_into_chat` 用 `textContent` + 合成 `InputEvent('input')` 只改 DOM，
   页面框架的输入模型不动 → 发送按钮永远 disabled（线上 `send_aborted:button_disabled`）。

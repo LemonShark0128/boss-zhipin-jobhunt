@@ -67,7 +67,8 @@ def send_text(br, tab, cfg, conv_key, job, text, template_part, opener_part=''):
         return 'send_aborted:template_mismatch'
     if opener_part and (len(opener_part) > 60 or
                         not G.basic_safety(opener_part, cfg, job)[0] or
-                        message_policy.commitment(opener_part)):
+                        message_policy.commitment(opener_part) or
+                        message_policy.self_negation(opener_part)):
         return 'manual_required'
     if text != opener_part + template_part:
         return 'send_aborted:text_mismatch'
@@ -81,7 +82,8 @@ def send_text(br, tab, cfg, conv_key, job, text, template_part, opener_part=''):
     if any(m.get('who') not in {'mine', 'friend'} for m in messages):
         return 'send_aborted:owner_unknown'
     with SS.state_lock(cfg['paths']['state'], reentrant=True):
-        SS.ledger_guard(cfg, verify=lambda row: SS.confirms_new_bubble(row, before))
+        SS.ledger_guard(cfg, verify=lambda row: SS.confirms_new_bubble(row, before),
+                        scope='conv', conv_key=conv_key)
         if messages and messages[-1].get('who') == 'mine':
             return 'last_turn_is_ours'
         meta = _metadata(cfg, before)
@@ -245,7 +247,7 @@ def _resume_diag(cfg, event, **fields):
             return value
 
         path = Path(cfg['paths']['workdir']) / 'resume_trace.jsonl'
-        row = dict(bounded(fields), ts=datetime.now().astimezone().isoformat(), event=event[:300])
+        row = dict(bounded(fields), ts=datetime.now(HC.cfg_tz(cfg)).isoformat(), event=event[:300])
         with open(path, 'a', encoding='utf-8') as stream:
             stream.write(json.dumps(row, ensure_ascii=False) + '\n')
         with open(path, encoding='utf-8') as stream:
@@ -367,7 +369,7 @@ def _resume_action(br, tab, cfg, conv_key, job_id, locate, selector, marker, rea
             if any(r.get('cmd') == 'conv_resume' and r.get('conv_key') == conv_key and
                    r.get('status') == 'sent' for r in SS.ledger_latest(cfg)):
                 return 'duplicate'
-            SS.ledger_guard(cfg)
+            SS.ledger_guard(cfg, scope='conv', conv_key=conv_key)
             before = chat_dom.active_conversation(br, tab)
             diag('start', conv_key=conv_key, selector=selector,
                  before=[{'who': m.get('who'), 'text': (m.get('text') or '')[:40], 'id': m.get('id')}

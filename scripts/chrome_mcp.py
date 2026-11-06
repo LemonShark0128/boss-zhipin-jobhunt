@@ -172,6 +172,14 @@ def wake_extension(cfg, attempts=3):
     return "extension_offline"
 
 
+def cleanup_browser(br):
+    """收尾：只关本进程自己开的标签页，再断开（投递与对话共用；audit-01 Q8 从 outbound 挪来）。"""
+    try:
+        return br.close_own_tabs()
+    finally:
+        br.close()
+
+
 class Browser:
     """Thin helper around the MCP tool surface used by this skill."""
 

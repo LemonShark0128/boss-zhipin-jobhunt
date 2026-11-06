@@ -12,8 +12,6 @@ import hunt_config as HC
 import outbound as O
 import chrome_mcp as C
 import greet as G
-import reply as R
-import send_safety as S
 import dump_conversations as D
 
 
@@ -38,15 +36,6 @@ class P1Tests(unittest.TestCase):
         with patch.object(G,'_generate_raw',return_value=(None,'llm_unreachable')):
             self.assertFalse(G.generate(self.cfg,self.job,fallback=lambda j:'明天准时到场面试')['text'])
 
-    def test_p1_2_travel_and_overseas_questions_and_outputs(self):
-        for question in ('你好，接受驻外吗？','您好，能出差吗？','你好，可以外派吗？','你好，愿意异地工作吗？'):
-            with self.subTest(question=question):
-                self.assertFalse(R.judge([{'who':'friend','text':question}])[0])
-                self.assertFalse(R.self_contained(question)[0])
-        self.assertFalse(R.check('可以驻外，岗位负责哪个区域？')[0])
-        self.assertFalse(R.check('能出差，您想先聊什么呢？')[0])
-        self.assertTrue(R.judge([{'who':'friend','text':'你好，方便聊聊吗？'}])[0])
-
     def test_p1_3_unknown_enabled_and_off_switch(self):
         br=Mock()
         for response, expected in [('[]','auto_greeting_unknown'), ('[{"t":"招呼语","on":true}]','auto_greeting_on'),
@@ -60,20 +49,6 @@ class P1Tests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'platform_greeting'):
                     O.send_one(br,1,dict(self.job),self.cfg)
             br.click.assert_not_called(); model.assert_not_called()
-
-    def test_p1_4_shared_automatic_budget_zero_and_manual_exclusion(self):
-        self.cfg['inbox']={'auto_reply':{'daily_cap':0}}
-        send=Mock(return_value='replied')
-        for cmd in ('auto_reply','interview_reply','followup'):
-            self.assertEqual(S.ledger_send(self.cfg,cmd,'id:1','j','hi',send),'skip_daily_cap')
-        send.assert_not_called(); self.assertFalse((self.root/'send_ledger.jsonl').exists())
-        self.cfg['inbox']['auto_reply']['daily_cap']=2
-        S.ledger_send(self.cfg,'reply-to','id:manual','','manual',send)
-        self.assertEqual(S.ledger_send(self.cfg,'interview_reply','id:1','j1','hi',send),'replied')
-        self.assertEqual(S.ledger_send(self.cfg,'followup','id:2','j2','hi',send),'replied')
-        send.reset_mock()
-        self.assertEqual(S.ledger_send(self.cfg,'auto_reply','id:3','','hi',send),'skip_daily_cap')
-        send.assert_not_called()
 
     def test_p1_5_rpc_error_raises_code_and_message(self):
         client=C.Client.__new__(C.Client); client.id=0; client.p=Mock()

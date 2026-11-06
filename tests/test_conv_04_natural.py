@@ -17,11 +17,11 @@ import conversation as C
 
 class NaturalReplyTests(unittest.TestCase):
     def setUp(self):
-        self.cfg = {'user': {'greeting': {'facts': ['做过七年本地生活BD']}}}
+        self.cfg = {'user': {'greeting': {'facts': ['做过五年示例行业BD']}}}
         self.row = S.new_record('id:fiction', 'reply', 'fiction-job',
                                 '虚构公司', '虚构HR', '虚构岗位', 1)
         self.ctx = dict(cfg=self.cfg, now_ts=30, job_ok=True, history=[],
-                        lead=lambda kind: '了解，', answer=lambda text: '做过七年本地生活BD，',
+                        lead=lambda kind: '了解，', answer=lambda text: '做过五年示例行业BD，',
                         opener=lambda: '对这个岗位挺感兴趣，',
                         extract=lambda h: {'requirements': '虚构客户维护'})
 
@@ -83,22 +83,22 @@ class NaturalReplyTests(unittest.TestCase):
         self.row['answers']['requirements'] = '虚构客户维护'
         actions, planned = self.decide('请问有相关工作经验吗？')
         template = R.DEFAULT_TEMPLATES['salary_structure']
-        self.assertEqual(self.texts(actions), ['做过七年本地生活BD，' + template])
+        self.assertEqual(self.texts(actions), ['做过五年示例行业BD，' + template])
         self.execute(self.row, actions, planned, real_gate=True)
         row, send = self.execute(self.row, actions, planned)
-        self.assertEqual(send.call_args.args[6:], (template, '做过七年本地生活BD，'))
+        self.assertEqual(send.call_args.args[6:], (template, '做过五年示例行业BD，'))
         self.assertEqual(row['experience_answered_ts'], 30)
 
     def test_answer_generation_only_uses_confirmed_facts(self):
         self.assertTrue(callable(getattr(L, 'answer', None)), 'answer helper missing')
-        for text, expected in [('做过七年本地生活BD，', '做过七年本地生活BD，'),
-                               ('做过10年本地生活BD，', ''), ('带过火箭研发团队，', '')]:
+        for text, expected in [('做过五年示例行业BD，', '做过五年示例行业BD，'),
+                               ('做过10年示例行业BD，', ''), ('带过火箭研发团队，', '')]:
             with patch.object(L.G, '_generate_raw', return_value=(text, '')):
                 self.assertEqual(L.answer(self.cfg, '有经验吗？', [], L.G.facts(self.cfg)), expected)
 
     def test_invalid_or_second_experience_is_manual(self):
         self.engaged()
-        for answer in ('做过10年本地生活BD，', '', '带过火箭研发团队，'):
+        for answer in ('做过10年示例行业BD，', '', '带过火箭研发团队，'):
             self.ctx['answer'] = lambda text: answer
             actions, planned = self.decide('请问有相关工作经验吗？')
             self.assertEqual(self.texts(actions), [])
@@ -116,7 +116,7 @@ class NaturalReplyTests(unittest.TestCase):
             self.assertEqual(R.classify(text), 'manual')
 
     def test_review2_experience_yes_no_questions(self):
-        for text in ('做过外卖平台的BD吗？', '带过团队吗？', '负责过连锁餐饮吗？',
+        for text in ('做过零售平台的BD吗？', '带过团队吗？', '负责过连锁餐饮吗？',
                      '你之前带过团队吗？', '以前做过BD吗？', '干过销售吗？',
                      '管过团队没有？', '跑过客户没？', '签过连锁客户?'):
             with self.subTest(text=text):
@@ -132,11 +132,11 @@ class NaturalReplyTests(unittest.TestCase):
 
     def test_review2_fact_formatting_is_not_a_new_claim(self):
         cases = [
-            ('5 年本地生活行业 BD 与团队管理经验',
-             '有的，5年本地生活行业BD与团队管理经验。'),
-            ('行业（虚构）：本地生活／外卖 BD', '有的，行业(虚构):本地生活/外卖BD。'),
-            ('行业(虚构):本地生活/外卖BD', '有的，行业（虚构）：本地生活／外卖 BD。'),
-            ('本地\t生活\u3000BD\u00a0经验', '有的，本地生活BD经验。'),
+            ('5 年示例行业行业 BD 与团队管理经验',
+             '有的，5年示例行业行业BD与团队管理经验。'),
+            ('行业（虚构）：示例行业／零售 BD', '有的，行业(虚构):示例行业/零售BD。'),
+            ('行业(虚构):示例行业/零售BD', '有的，行业（虚构）：示例行业／零售 BD。'),
+            ('示例\t行业\u3000BD\u00a0经验', '有的，示例行业BD经验。'),
         ]
         for fact, answer in cases:
             with self.subTest(fact=fact):
@@ -144,18 +144,18 @@ class NaturalReplyTests(unittest.TestCase):
                 self.assertTrue(R.safe_answer(answer, self.cfg))
 
     def test_review2_normalization_does_not_relax_grounding(self):
-        self.cfg['user']['greeting']['facts'] = ['5 年本地生活行业 BD 与团队管理经验']
-        for answer in ('有的，6年本地生活行业BD与团队管理经验。',
-                       '有的，5年全国本地生活行业BD与团队管理经验。',
-                       '有的，有的，5年本地生活行业BD与团队管理经验。'):
+        self.cfg['user']['greeting']['facts'] = ['5 年示例行业行业 BD 与团队管理经验']
+        for answer in ('有的，6年示例行业行业BD与团队管理经验。',
+                       '有的，5年全国示例行业行业BD与团队管理经验。',
+                       '有的，有的，5年示例行业行业BD与团队管理经验。'):
             with self.subTest(answer=answer):
                 self.assertFalse(R.safe_answer(answer, self.cfg))
 
     def test_review2_compact_answer_reaches_round2_gate_unchanged(self):
         self.engaged()
         self.row['answers'].update(requirements='虚构要求', salary_structure='虚构结构')
-        self.cfg['user']['greeting']['facts'] = ['5 年本地生活行业 BD 与团队管理经验']
-        answer = '有的，5年本地生活行业BD与团队管理经验。'
+        self.cfg['user']['greeting']['facts'] = ['5 年示例行业行业 BD 与团队管理经验']
+        answer = '有的，5年示例行业行业BD与团队管理经验。'
         self.ctx['answer'] = lambda text: answer
         actions, planned = self.decide('请问有相关工作经验吗？')
         template = '面试大概有几轮？可以安排线上面试吗？'
@@ -169,11 +169,11 @@ class NaturalReplyTests(unittest.TestCase):
     def test_ack_whitelist_requires_one_following_fact(self):
         for ack in ('有的', '做过', '是的', '有'):
             with self.subTest(ack=ack):
-                text = ack + '，做过七年本地生活BD。'
+                text = ack + '，做过五年示例行业BD。'
                 self.assertTrue(R.safe_answer(text, self.cfg))
                 with patch.object(L.G, '_generate_raw', return_value=(text, '')):
                     self.assertEqual(L.answer(self.cfg, '有经验吗？', [], []), text)
-                for invalid in (ack, ack + '，' + ack + '，做过七年本地生活BD。',
+                for invalid in (ack, ack + '，' + ack + '，做过五年示例行业BD。',
                                 ack + '，带过虚构研发团队。'):
                     self.assertFalse(R.safe_answer(invalid, self.cfg))
 
@@ -192,7 +192,7 @@ class NaturalReplyTests(unittest.TestCase):
 
     def test_experience_preserves_batch_resume_state(self):
         self.row['origin'] = 'inbound'
-        for answer in ('做过七年本地生活BD，', ''):
+        for answer in ('做过五年示例行业BD，', ''):
             self.ctx['answer'] = lambda text: answer
             actions, planned = R.decide(self.row, [
                 {'who': 'friend', 'text': '你好', 'ts': 10},
@@ -203,14 +203,14 @@ class NaturalReplyTests(unittest.TestCase):
                 self.assertIsNone(planned['asked_round1_ts'])
 
     def test_fact_excerpt_cannot_drop_negation_or_subject(self):
-        for fact in ('未做过七年本地生活BD', '同事做过七年本地生活BD'):
+        for fact in ('未做过五年示例行业BD', '同事做过五年示例行业BD'):
             self.cfg['user']['greeting']['facts'] = [fact]
             actions, planned = self.decide('有相关经验吗？')
             self.assertEqual(self.texts(actions), [])
             self.assertEqual(planned['status'], 'manual')
 
     def test_batch_greeting_does_not_swallow_experience_question(self):
-        for answer in ('做过七年本地生活BD，', ''):
+        for answer in ('做过五年示例行业BD，', ''):
             self.ctx['answer'] = lambda text: answer
             actions, planned = R.decide(self.row, [
                 {'who': 'friend', 'text': '方便聊聊吗？', 'ts': 10},
@@ -230,12 +230,12 @@ class NaturalReplyTests(unittest.TestCase):
         self.engaged()
         self.row['answers'].update(requirements='虚构要求', salary_structure='虚构结构')
         actions, planned = self.decide('请问有相关工作经验吗？')
-        self.assertEqual(self.texts(actions), ['做过七年本地生活BD，' + R.DEFAULT_TEMPLATES['round2']])
+        self.assertEqual(self.texts(actions), ['做过五年示例行业BD，' + R.DEFAULT_TEMPLATES['round2']])
         self.row.update(status='round2', asked_round2_ts=4)
         self.row['answers'].update(interview_rounds='两轮', online_interview='线上')
         actions, planned = self.decide('请问有相关工作经验吗？')
         tail = '您这边对这个岗位还有什么想了解的吗？'
-        self.assertEqual(self.texts(actions), ['做过七年本地生活BD，' + tail])
+        self.assertEqual(self.texts(actions), ['做过五年示例行业BD，' + tail])
         self.execute(self.row, actions, planned, real_gate=True)
 
     def test_template_repeat_guard(self):

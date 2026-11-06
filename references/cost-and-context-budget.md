@@ -31,8 +31,7 @@
 ## 模型侧：注入项逐个砍
 
 - 招呼语：`user.greeting.facts` 9–12 条足够；`max_jd_chars` 别随手调到几千；事实条数越多，模型越容易抓错重点（也越贵）。
-- 自动回复：只注入**一条** hint brief（`H.find_hint()` 只返回一个字符串），绝不把 `entries` 带进 prompt。
-- 话术合并（`human-compact`）：同类多条 brief 合并成一条 canonical，用一次模型调用换掉以后每次的重复注入。
+- 旧自动回复的 hint 注入与 `human-compact` 话术合并已随 cleanup-02 移除（2026-11-06）；对话模块的 LLM 只写承接句/事实库答句。
 - 缓存：升 `PROMPT_VERSION` 会让历史话术全部失效，之后每条都多一次模型调用 —— 升版前先告知用户这个代价。
 
 ## 增长治理（append-only 文件必须设上限）

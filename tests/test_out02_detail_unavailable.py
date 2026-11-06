@@ -66,9 +66,10 @@ class DetailUnavailableTests(Base):
 
     def test_reopen_navigation_error_skips_network(self):
         browser = self.browser([''] * 8)
-        browser.nav.side_effect = [{}, {'isError': True}]
+        # heal-01：重开导航出错会再等一下重试一次，两次都错才 skip_network
+        browser.nav.side_effect = [{}, {'isError': True}, {'isError': True}]
         self.assertEqual(self.inspect(browser), ('skip_network', ''))
-        self.assert_reopened(browser)
+        self.assertEqual(browser.nav.call_count, 3)
         self.assertEqual(browser.json.call_count, 8)
         browser.js.assert_not_called()
 

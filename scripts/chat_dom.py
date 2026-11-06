@@ -1,5 +1,4 @@
 """会话页 DOM 读取、定位与发送身份校验。"""
-import hashlib
 import json
 import re
 import time
@@ -9,80 +8,7 @@ import conv_parse
 from conv_parse import owner_parser_js, parse_message_owner
 
 
-def open_and_read(br, tab, brand, limit=10, boss=None):
-    rows = conversation_rows(br, tab)
-    try:
-        target = select_conversation(rows, brand, boss)
-    except ValueError as exc:
-        return str(exc), []
-    status, _, msgs = open_by_index(br, tab, rows.index(target), limit, target['conv_key'])
-    return status, msgs
-
-
-
 CHAT_URL = "https://www.zhipin.com/web/geek/chat"
-
-
-
-NEW_GREET_TAB = "新招呼"
-
-
-
-ONLY_CHAT_TAB = "仅沟通"
-
-
-
-def goto_tab(br, tab, name):
-    """切消息页的筛选标签。只有「全部/未读/新招呼」是常驻的，其余在「更多」里。"""
-    br.nav(tab, CHAT_URL, wait=5)
-    hit = br.js(tab, "(()=>{const e=[...document.querySelectorAll('.label-name')]"
-                     ".find(x=>(x.innerText||'').trim()==='%s'); if(!e) return 'nf';"
-                     "e.id='bh-tab'; return 'ok'})()" % name)
-    if "ok" not in (hit.get("text") or ""):
-        more = br.js(tab, "(()=>{const e=[...document.querySelectorAll('[class*=dropmenu-label],.label-name')]"
-                          ".find(x=>(x.innerText||'').trim()==='更多'); if(!e) return 'nf';"
-                          "e.id='bh-more'; return 'ok'})()")
-        if "ok" not in (more.get("text") or ""):
-            return False
-        br.click(tab, "#bh-more")
-        time.sleep(1.2)
-        hit = br.js(tab, "(()=>{const e=[...document.querySelectorAll('.label-name,li,div')]"
-                         ".filter(x=>(x.innerText||'').trim()==='%s');"
-                         "if(!e[0]) return 'nf'; e[0].id='bh-tab'; return 'ok'})()" % name)
-        if "ok" not in (hit.get("text") or ""):
-            return False
-    br.click(tab, "#bh-tab")
-    time.sleep(2.5)
-    return True
-
-
-
-def clean_item(tx):
-    """干掉列表项前缀（未读红点数、时间），只留「HR 姓名+公司+职位」。"""
-    s = tx or ""
-    for _ in range(3):
-        s2 = re.sub(r"^\d{1,3}\s*", "", s)
-        s2 = re.sub(r"^(昨天|今天|前天|星期[一二三四五六日]|\d{2}-\d{2}|\d{1,2}:\d{2})\s*", "", s2)
-        if s2 == s:
-            break
-        s = s2
-    return s.strip()[:26]
-
-
-
-def list_texts(br, tab, n=20):
-    """读当前标签下每个会话项的文本（用来判断哪些还没处理过）。"""
-    expr = ("(()=>[...document.querySelectorAll('.friend-content')]"
-            ".map(e=>(e.innerText||'').replace(/\\s+/g,' ').trim().slice(0,60)).slice(0,%d))()" % int(n))
-    return br.json(tab, expr, default=[]) or []
-
-
-
-def count_list(br, tab):
-    r = br.js(tab, "(()=>document.querySelectorAll('.friend-content').length)()")
-    m = re.search(r"\d+", r.get("text") or "")
-    return int(m.group(0)) if m else 0
-
 
 
 # Shared parser for list entries and the independent active chat header/panel.
@@ -114,7 +40,6 @@ const identity = el => {
   return brand && boss ? 'pair:' + norm(brand) + '|' + norm(boss) : '';
 };
 """
-
 
 
 def conversation_rows(br, tab):
@@ -156,7 +81,6 @@ def conversation_rows(br, tab):
     return rows
 
 
-
 def reveal_conversation(br, tab, item):
     """Scroll a uniquely identified source row into the virtual DOM, without opening it."""
     script = "(async () => { const item = " + json.dumps(item, ensure_ascii=False) + r""";
@@ -181,6 +105,62 @@ def reveal_conversation(br, tab, item):
         return result if isinstance(result, dict) else {'ok': False, 'reason': 'invalid_response'}
     except Exception:
         return {'ok': False, 'reason': 'reveal_error'}
+
+
+def pin_conversation(br, tab, item, wait_ms=3000):
+    """conv-13/13b：只调用该行 last-msg-content 组件的 setTop(boss, 1)；不悬停、不点菜单。
+    绝不调用 deleteBoss / setCancelNotInterested。返回 {ok, already?, reason?}。"""
+    script = "(async () => { const item = " + json.dumps(item, ensure_ascii=False) + \
+        "; const waitMs = " + str(int(wait_ms)) + r""";
+      const present = x => x !== undefined && x !== null && x !== '';
+      const KEYS = ['encryptJobId', 'name', 'brandName'];
+      if (!KEYS.every(k => present(item[k]))) return {ok:false, reason:'bad_item'};
+      const same = row => !!row && KEYS.every(k => row[k] === item[k]) &&
+        ['friendId', 'securityId'].every(k => !present(item[k]) || !present(row[k]) || row[k] === item[k]);
+      const compOf = fc => {
+        const op = fc.querySelector('.user-operation');
+        let node = op ? op.parentElement : fc;
+        for (let depth = 0; node && depth <= 6; depth++, node = node.parentElement) {
+          const vm = node.__vue__;
+          if (vm && vm.$options && vm.$options.name === 'last-msg-content') return vm;
+        }
+        return null;
+      };
+      // conv-13b：置顶后该行离开 virtual-list dataSources、移到 DOM 第 0 行（class friend-top），
+      // 所以每次都从 DOM 重新按三键找，不查 dataSources。
+      const find = () => {
+        const hits = [];
+        for (const fc of document.querySelectorAll('.friend-content')) {
+          const vm = compOf(fc);
+          if (vm && same(vm.boss) && !hits.some(h => h.vm === vm)) hits.push({vm, fc});
+        }
+        return hits;
+      };
+      const isTopRow = h => h.vm.boss.isTop === 1 || h.vm.boss.isTop === true ||
+        /(^|\s)friend-top(\s|$)/.test(String(h.fc.className || ''));
+      const hits = find();
+      if (hits.length === 0) return {ok:false, reason:'not_in_view'};
+      if (hits.length !== 1) return {ok:false, reason:'ambiguous'};
+      const vm = hits[0].vm, boss = vm.boss;
+      if (present(boss.groupId)) return {ok:false, reason:'group'};
+      if (isTopRow(hits[0])) return {ok:true, already:true};
+      if (typeof vm.setTop !== 'function') return {ok:false, reason:'no_set_top'};
+      // 真机：第二个参数传布尔真 → friendIsTop.json code 19「参数值错误」；菜单用 1/0
+      vm.setTop(boss, 1);
+      for (let waited = 0; waited <= waitMs; waited += 200) {
+        const now = find();
+        if (now.length === 1 && isTopRow(now[0])) return {ok:true};
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      return {ok:false, reason:'not_confirmed'};
+    })().catch(() => ({ok:false, reason:'pin_error'}))"""
+    try:
+        result = br.json(tab, script, default={})
+    except Exception:
+        return {'ok': False, 'reason': 'pin_error'}
+    if not isinstance(result, dict) or not isinstance(result.get('ok'), bool):
+        return {'ok': False, 'reason': 'invalid_response'}
+    return result
 
 
 def wait_rows_ready(br, tab, attempts=5, delay=2.0, sleep=time.sleep):
@@ -223,10 +203,8 @@ def reset_list_scroll(br, tab):
         return
 
 
-
 def conversation_norm(text):
     return re.sub(r'\s+', '', unicodedata.normalize('NFKC', text or '')).lower()
-
 
 
 def source_conversation_key(item):
@@ -234,7 +212,6 @@ def source_conversation_key(item):
         return item['conv_key']
     brand, boss = conversation_norm(item.get('brandName')), conversation_norm(item.get('name'))
     return 'pair:' + brand + '|' + boss if brand and boss else ''
-
 
 
 def select_conversation(rows, text='', boss=None, conv_key=None):
@@ -266,7 +243,6 @@ def select_conversation(rows, text='', boss=None, conv_key=None):
     return matches[0]
 
 
-
 def active_conversation(br, tab, limit=10):
     data = br.json(tab, "(() => {" + CONVERSATION_JS + """
       const panels = [...document.querySelectorAll('.chat-conversation')];
@@ -290,7 +266,6 @@ def active_conversation(br, tab, limit=10):
         if 'classes' in message:
             message['who'] = parse_message_owner(message['classes'], message.get('text'))
     return data
-
 
 
 def open_by_index(br, tab, i, limit=10, conv_key=None):
@@ -322,17 +297,8 @@ def open_by_index(br, tab, i, limit=10, conv_key=None):
     return 'ok', target.get('text', ''), active.get('messages') or []
 
 
-
 def normalized_history(history):
     return [{k: m.get(k) or '' for k in ('who', 'id', 'text', 'ts')} for m in history]
-
-
-
-def history_fingerprint(history):
-    # Count, complete content digest and timestamps; deterministic across reads.
-    return hashlib.sha256(json.dumps(normalized_history(history), sort_keys=True,
-                                     ensure_ascii=False).encode()).hexdigest()
-
 
 
 def atomic_chat_click(br, tab, key, text, expected_history=None, *, system_texts=None):

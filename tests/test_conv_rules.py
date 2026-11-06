@@ -416,9 +416,7 @@ class ConversationRulesTests(unittest.TestCase):
         row['answers']['online_interview'] = False
         self.assertEqual(R.round_questions(row, cfg, 2), '')
 
-    def test_card_line_keeps_order_and_false_answer(self):
-        card = {'brand': '虚构星港', 'title': '测试岗位', 'boss': '虚构小岚', **ALL}
-        self.assertEqual(R.card_line(card), '虚构星港｜测试岗位｜虚构小岚｜负责虚构产品测试｜底薪加奖金｜两轮｜可以线上')
+    def test_card_keeps_false_answer(self):
         row = self.record(status='round2')
         actions, after = self.run_step(row, '不支持远程', self.ctx({'online_interview': False}))
         self.assertIs(actions[0]['card']['online_interview'], False)

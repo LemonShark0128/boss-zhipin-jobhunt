@@ -2,18 +2,13 @@
 import json
 import re
 import sys
-import tempfile
 import unicodedata
 import unittest
 from html.parser import HTMLParser
 from pathlib import Path
-from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import chat_dom as CD
-import boss_hunt as B
-import hunt_filter as HF
-import hunt_state as HS
 
 
 # Capture from the construction order, retaining all five real DOM features.
@@ -138,30 +133,6 @@ class ConversationDOMTests(unittest.TestCase):
         # 什么都没有就留空，交给上层报警
         self.assertEqual(CD.conversation_rows(DOMBrowser('<div class="friend-content"></div>'), 1)[0]['conv_key'], '')
         self.assertIn("'pair:' + norm(brand) + '|' + norm(boss)", CD.CONVERSATION_JS)
-
-    def test_zero_targets_warns(self):
-        with tempfile.TemporaryDirectory(prefix='conversation-dom-') as root:
-            cfg = {'paths': {'workdir': root, 'state': str(Path(root) / 'state.json')},
-                   'inbox': {'auto_reply': {'enabled': True}, 'interview_auto_reply': False}}
-            st = HS.load_state(cfg)
-            br = Mock()
-            br.network.return_value = {'text': json.dumps({'code': 0, 'zpData': {'result': []}})}
-            for count in (40, 0):
-                out = []
-                with self.subTest(count=count), \
-                     patch.object(B, 'scan_conv_states', return_value=dict(checked=0, failed=0, skipped_failures=0, deadline=False)), \
-                     patch.object(HF, 'load_jobs', return_value=[]), \
-                     patch.object(CD, 'goto_tab', return_value=True), \
-                     patch.object(CD, 'conversation_rows', return_value=[{'conv_key': ''} for _ in range(count)]), \
-                     patch.object(CD, 'open_by_index') as opener, \
-                     patch.object(B, 'send_in_chat') as sender, \
-                     patch.object(B.R, 'generate') as generate:
-                    B.inbox(cfg, br, 1, st, out)
-                warning = '⚠️ 新招呼 40 个但一个会话 ID 都读不出（页面结构可能已改版），自动回话跳过'
-                self.assertEqual(warning in out, count > 0)
-                opener.assert_not_called()
-                sender.assert_not_called()
-                generate.assert_not_called()
 
 
 if __name__ == '__main__':

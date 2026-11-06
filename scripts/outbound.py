@@ -12,9 +12,7 @@ import hunt_config as HC
 import hunt_filter as HF
 import hunt_schedule as HQ
 import hunt_state as HS
-
-
-CAPTCHA_RE = r"验证码|滑动验证|安全验证|人机验证|拼图"
+from jd_page import read_jd  # audit-01 Q8：JD 读取挪到 jd_page，投递与对话共用
 
 
 APPWALL_RE = r"需(要)?(下载|跳转|打开)\s*App|App内(查看|沟通)|去小程序"
@@ -89,10 +87,29 @@ def login_state(br, tab):
     return br.json(tab, expr, default={"raw": "eval_failed"}) or {}
 
 
+LOGIN_RETRY_WAIT = 5     # heal-01：标签没开成，等一下再开一次
+LOGIN_READ_WAIT = 4      # heal-01：页面没渲染出头像/登录墙，等一下再读
+LOGIN_EXTRA_READS = 2
+NAV_RETRY_WAIT = 6       # heal-01：详情页导航瞬时出错，等一下在同一标签页再导航一次
+GREETING_RETRY_WAIT = 4  # heal-02：招呼语开关未渲染时，先在同一页等一下再读
+
+
 def check_login(br, cfg):
-    tab = br.new_tab("https://www.zhipin.com/web/geek/jobs")
+    """只读探测登录态。瞬时失败（标签没开成、页面没渲染完）各重试；明确的登录墙不重试、不代登录。"""
+    url = "https://www.zhipin.com/web/geek/jobs"
+    tab = br.new_tab(url)
+    if not tab:
+        time.sleep(LOGIN_RETRY_WAIT)
+        tab = br.new_tab(url)
+        if not tab:
+            return None, {}
     time.sleep(3)
     st = login_state(br, tab)
+    for _ in range(LOGIN_EXTRA_READS):
+        if st.get("login") or st.get("avatar"):
+            break
+        time.sleep(LOGIN_READ_WAIT)
+        st = login_state(br, tab)
     return tab, st
 
 
@@ -122,7 +139,8 @@ def switch_status(rows):
 
 
 def greeting_switch(br, tab, fix=False):
-    br.nav(tab, "https://www.zhipin.com/web/geek/notify-set?type=greetSet", wait=3.5)
+    url = "https://www.zhipin.com/web/geek/notify-set?type=greetSet"
+    br.nav(tab, url, wait=3.5)
     expr = ("(()=>{const rows=[...document.querySelectorAll('.ui-switch')];"
             "return JSON.stringify(rows.map(e=>{"
             "const aria=e.getAttribute('aria-checked');"
@@ -137,9 +155,16 @@ def greeting_switch(br, tab, fix=False):
             "((hv==='1')!==(aria==='true')))on=null;"
             "return {t:(e.closest('li,div')?e.closest('li,div').innerText:'').replace(/\\s+/g,' ').slice(0,80),on,"
             "hid:hv,aria,checked};}));})()")
-    r = br.js(tab, expr)
-    switches = CM.parse_json_payload(r.get("text") or "", []) or []
-    current = switch_status(switches)
+    for attempt in range(3):
+        if attempt == 1:
+            time.sleep(GREETING_RETRY_WAIT)
+        elif attempt == 2:
+            br.nav(tab, url, wait=3.5)
+        r = br.js(tab, expr)
+        switches = CM.parse_json_payload(r.get("text") or "", []) or []
+        current = switch_status(switches)
+        if current != 'auto_greeting_unknown':
+            break
     if current == 'auto_greeting_on' and fix:
         br.js(tab, "(()=>{const rows=[...document.querySelectorAll('.ui-switch')];"
                    "const hit=rows.find(e=>((e.closest('li,div')||{}).innerText||'').includes('招呼')"
@@ -229,35 +254,22 @@ def scan(cfg, br, targets=None, keywords=None, pages=3):
     return saved, errs
 
 
-JD_EXPR = ("(()=>{const sels=['.job-sec-text','.job-detail-section .job-sec-text',"
-           "'.job-detail-body','.job-detail-section','.job-detail'];"
-           "for(const s of sels){const e=document.querySelector(s);"
-           "const t=((e&&e.innerText)||'').replace(/\\s+/g,' ').trim();"
-           "if(t.length>60)return t.slice(0,1800);}"
-           "const b=(document.body.innerText||'').replace(/\\s+/g,' ');"
-           "const m=b.search(/职位描述|岗位职责|工作职责/);"
-           "return m>=0?b.slice(m,m+1500):''})()")
-
-
 LAST_GREET = {}   # send_one 顺带把本条招呼语的生成信息留在这里，do_send 记进 state
 
 
-def read_jd(br, tab, cfg):
-    """读详情页的 JD 正文（截断）。只是读，点任何按钮之前做。"""
-    try:
-        r = br.js(tab, JD_EXPR, timeout=30)
-        t = CM.unwrap(r.get("text") or "")
-    except Exception:
-        return ""
-    t = re.sub(r"\s+", " ", t or "").strip()
-    cap = int(G.block(cfg)["llm"].get("max_jd_chars") or 1000)
-    return t[: max(cap * 2, cap)]
+def _nav_detail(br, tab, jid):
+    """heal-01：详情页导航出错先等一下重试一次；两次都错才算网络问题。"""
+    url = "https://www.zhipin.com/job_detail/%s.html" % jid
+    nav = br.nav(tab, url, wait=4.0)
+    if nav and nav.get("isError"):
+        time.sleep(NAV_RETRY_WAIT)
+        nav = br.nav(tab, url, wait=4.0)
+    return not (nav and nav.get("isError"))
 
 
 def inspect_job(br, tab, job, cfg):
     jid = job.get("encryptJobId")
-    nav = br.nav(tab, "https://www.zhipin.com/job_detail/%s.html" % jid, wait=4.0)
-    if nav and nav.get("isError"):
+    if not _nav_detail(br, tab, jid):
         return "skip_network", ""
     # 只按结构判验证码：详情页底部有隐藏的登录框，正文里常带「发送验证码」，
     # 用整页文本匹配「验证码」会把正常岗位全判成 skip_captcha（2026-10-23 实测 4/4 误判）。
@@ -282,8 +294,7 @@ def inspect_job(br, tab, job, cfg):
         if state or not cfg.get("_deadline") or attempt == 1:
             break
         # 定时模式读不到状态时，仅重开同一岗位一次。
-        nav = br.nav(tab, "https://www.zhipin.com/job_detail/%s.html" % jid, wait=4.0)
-        if nav and nav.get("isError"):
+        if not _nav_detail(br, tab, jid):
             return "skip_network", ""
     if state.get("login"):
         return "skip_not_logged_in", ""
@@ -314,7 +325,7 @@ def job_identity_matches(br, tab, job):
       const text = selector => { const e=document.querySelector(selector);
         return e ? e.innerText.trim() : ''; };
       // 公司名只认 document.title（实测：.company-name 指向侧栏"同类公司"，会拿到别家的名字）。
-      // 标题形如 「潮玩渠道经理招聘」_戊示例科技招聘-BOSS直聘
+      // 标题形如 「虚构渠道经理招聘」_戊示例科技招聘-BOSS直聘
       const tail = (document.title || '').split('_')[1] || '';
       const bm = tail.match(/^(.+?)招聘/);
       return {job_id:match ? match[1] : '',
@@ -329,13 +340,8 @@ def job_identity_matches(br, tab, job):
             and bool(job.get('brandName')) and norm(data.get('brand')) == norm(job['brandName']))
 
 
-def atomic_job_click(br, tab, job, text):
-    return CS.click_send_scoped(br, tab, text, job=job,
-                                conv_key='job:' + str(job.get('encryptJobId')))
-
-
 def send_one(br, tab, job, cfg):
-    SS.ledger_guard(cfg)
+    SS.ledger_guard(cfg, scope='outbound')
     jid = job.get("encryptJobId")
     if job.pop("_prepared", False):
         status, jd = "ready", job.get("_jd", "")
@@ -479,15 +485,32 @@ def send_one(br, tab, job, cfg):
                         'brand': job.get('brandName'), 'boss': job.get('bossName'), 'name': job.get('jobName')})
 
 
-def cleanup_browser(br):
-    try:
-        return br.close_own_tabs()
-    finally:
-        br.close()
+cleanup_browser = CM.cleanup_browser  # audit-01 Q8：实现挪到 chrome_mcp，保留旧名
+
+
+def send_budget(cfg, st, now, want=None):
+    """本跳预算与各级配额：(budget, quotas)。do_send 与 tick --dry-run 共用（audit-01 #6），
+    两边不再各写一份「daily_cap − day_count → max_per_window → per_window → shrink_quotas」。"""
+    sending = cfg.get("sending") or {}
+    per_window = max(0, int((cfg.get("schedule") or {}).get("per_window") or 0))
+    budget = max(0, int(sending.get("daily_cap") or 0) - int(st.get("day_count") or 0))
+    if want is not None:
+        budget = min(budget, max(0, int(want)))
+    modern = HF.grading_enabled(cfg) or "grade_quota" in sending
+    quotas = HQ.quotas_for_now(cfg, st, now) if modern else HQ.grade_limits(cfg)
+    if not modern and want is None:
+        budget = min(budget, per_window)
+    if modern:
+        budget = min(budget, max(0, int(sending.get("max_per_window", 8))))
+        if not sending.get("carry_over", "grade_quota" in sending):
+            budget = min(budget, per_window)
+        # A 先发，配额不压缩时 budget 会被 A 吃光，B 永远发不出去（实测 22:00 A8/B8 全发成 A）。
+        quotas = HQ.shrink_quotas(quotas, budget)
+    return budget, quotas
 
 
 def do_send(cfg, br, tab, st, want, out, window_key=None):
-    SS.ledger_guard(cfg)
+    SS.ledger_guard(cfg, scope='outbound')
     HS.refresh_ledger_counts(cfg, st)
     sending = cfg.get("sending") or {}
     if window_key is None:
@@ -499,29 +522,17 @@ def do_send(cfg, br, tab, st, want, out, window_key=None):
     halted = False
     quiet = {}
     cap = int(sending.get("daily_cap") or 0)
-    budget = max(0, cap - int(st.get("day_count") or 0))
-    if want is not None:
-        budget = min(budget, max(0, int(want)))
-    modern = HF.grading_enabled(cfg) or "grade_quota" in sending
-    quotas = HQ.quotas_for_now(cfg, st, HC.now_local(cfg)) if modern else HQ.grade_limits(cfg)
-    if not modern and want is None:
-        budget = min(budget, max(0, int((cfg.get("schedule") or {}).get("per_window") or 0)))
-    if modern:
-        budget = min(budget, max(0, int(sending.get("max_per_window", 8))))
-        if not sending.get("carry_over", "grade_quota" in sending):
-            budget = min(budget, max(0, int((cfg.get("schedule") or {}).get("per_window") or 0)))
-        # A 先发，配额不压缩时 budget 会被 A 吃光，B 永远发不出去（实测 22:00 A8/B8 全发成 A）。
-        quotas = HQ.shrink_quotas(quotas, budget)
+    budget, quotas = send_budget(cfg, st, HC.now_local(cfg), want)
     sent_items, skipped = [], []
     sent_contacts = set()
     if budget <= 0 or not any(quotas.values()):
         out.append("本跳或今日额度已用完 %d/%d，停止发送" % (st.get("day_count", 0), cap))
         return {"sent": 0, "day_count": st.get("day_count", 0), "daily_cap": cap,
-                "by_grade": used if "used" in dir() else {}, "quotas": quotas,
+                "by_grade": {}, "quotas": quotas,
                 "items": [], "skipped": [], "inspects": 0, "reason": "quota_exhausted",
                 "quiet": quiet, "stop_reason": "quota_exhausted", "retry_pending": len(retries)}
     shares = {t.get("name"): t.get("daily_share") for t in cfg.get("targets") or [] if t.get("daily_share")}
-    gap = int(sending.get("min_gap_seconds") or 60)
+    gap = int(SS.min_gap_seconds(cfg) or 60)  # 显式 0 在投递里仍按 60（原行为）
     used = {}
     pool = st.setdefault("b_pool", {})
     snapshot_jobs = HF.load_jobs(cfg)

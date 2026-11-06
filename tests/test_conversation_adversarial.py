@@ -35,10 +35,13 @@ class Adv(T.ConversationRunTests):
         stale['last_msg_id'] = 'gone'
         conv_store.save(self.path, {stale['conv_key']: stale})
         newer, older = self.item(1, text='虚构新消息', age=5), self.item(2, age=50)
+        hops = []
         for _ in range(2):
             self.br.new_tab.side_effect = [10, 11]
             _, opened, _, _, _ = self.run_hop(items=[newer, older])
-        self.assertEqual(opened.call_args.kwargs['conv_key'], 'id:fiction2')
+            hops.append([c.kwargs['conv_key'] for c in opened.call_args_list])
+        # conv-11：最旧优先——第一跳先处理较旧的 fiction2，第二跳轮到游标丢失的 fiction1；两边都没被饿死
+        self.assertEqual(hops, [['id:fiction2'], ['id:fiction1']])
 
     def test_text_ok_resume_failed_never_resends_question(self):
         self.run_hop(resume_result='send_aborted:resume_button')
@@ -564,19 +567,19 @@ class NaturalReplyAdv(unittest.TestCase):
 
     def test_answer_without_punctuation_is_separated_from_question(self):
         import re
-        self.ctx['answer'] = lambda text: '做过七年本地生活BD'
+        self.ctx['answer'] = lambda text: '做过五年示例行业BD'
         actions, _ = self.base.decide('有相关经验吗？')
         texts = self.base.texts(actions)
         self.assertEqual(len(texts), 1)
-        self.assertRegex(texts[0], r'^做过七年本地生活BD[，。]')
+        self.assertRegex(texts[0], r'^做过五年示例行业BD[，。]')
 
     def test_short_ack_word_before_fact_is_allowed(self):
-        self.ctx['answer'] = lambda text: '有的，做过七年本地生活BD，'
+        self.ctx['answer'] = lambda text: '有的，做过五年示例行业BD，'
         actions, _ = self.base.decide('有相关经验吗？')
-        self.assertTrue(self.base.texts(actions)[0].startswith('有的，做过七年本地生活BD，'))
+        self.assertTrue(self.base.texts(actions)[0].startswith('有的，做过五年示例行业BD，'))
 
     def test_ack_word_alone_or_invented_claim_still_manual(self):
-        for answer in ('有的，', '有的，做过十年连锁餐饮BD，', '有的，有的，做过七年本地生活BD，'):
+        for answer in ('有的，', '有的，做过十年连锁餐饮BD，', '有的，有的，做过五年示例行业BD，'):
             with self.subTest(answer=answer):
                 row = copy.deepcopy(self.row)
                 self.ctx['answer'] = lambda text, a=answer: a
@@ -1130,9 +1133,11 @@ class Conv06DisplacedInViewCandidateAdv(Conv06AdvBase):
                 items=[near, far], row_snapshots=lambda *a: list(window[0]))
         self.assertEqual(result['row_missing'], 0)
         self.assertEqual(result['processed'], 2)
-        self.assertEqual(result['revealed'], 1)
+        # conv-11：最旧优先先揭示处理 far，near 被挤出视窗后再揭示一次；revealed 记揭示成功次数
+        self.assertEqual(result['revealed'], 2)
+        self.assertEqual(result['revealed_processed'], 2)
         self.assertEqual([k.kwargs['conv_key'] for k in opened.call_args_list],
-                         [near['conv_key'], far['conv_key']])
+                         [far['conv_key'], near['conv_key']])
         self.assertIn(near['conv_key'], [a.args[2]['conv_key'] for a in rev.call_args_list])
 
 
@@ -1143,7 +1148,8 @@ class Conv06ResetErrorIgnoredAdv(Conv06AdvBase):
         visible = [{'conv_key': item['conv_key'], 'receipt': False}]
         self.br.json.side_effect = RuntimeError('虚构复位失败')
         with patch.object(c.chat_dom, 'reveal_conversation', return_value={'ok': True}):
-            result, opened, _, _, _ = self.run_hop(items=[item], row_snapshots=[[], visible, visible, visible])
+            # conv-11：处理时当前行仍为空才揭示，所以前两次读行都给空
+            result, opened, _, _, _ = self.run_hop(items=[item], row_snapshots=[[], [], visible, visible, visible])
         self.assertTrue(result['ok'])
         self.assertEqual(result['revealed'], 1)
         self.assertEqual(result['processed'], 1)
@@ -1183,3 +1189,662 @@ global.Event = class {constructor(t){this.type=t;}};
         out = json.loads(run.stdout)
         self.assertEqual(out['result'], {'ok': False, 'reason': 'not_found'})
         self.assertEqual(out['events'], [])
+
+
+
+class Conv08AdvBase(T.ConversationRunTests):
+    """复用对话替身夹具；不继承基类 test_ 方法。"""
+    pass
+
+
+for _name in [n for n in dir(T.ConversationRunTests) if n.startswith('test_')]:
+    setattr(Conv08AdvBase, _name, None)
+
+class Conv08BlockedResumeCardAdv(Conv08AdvBase):
+    def test_blocked_brand_resume_card_never_accepted(self):
+        # 屏蔽公司 HR 发「要简历」卡片、auto_accept 开着：不得同意、不得发简历
+        c = self.module()
+        self.cfg['filters'] = {'brand_block': ['示例云图']}
+        self.cfg['conversation']['auto_accept_resume_request'] = True
+        item = self.item(text='我想要一份您的附件简历，您是否同意')
+        item['brandName'] = '杭州示例云图'
+        with patch.object(c.conv_actions, 'accept_resume_request', return_value='sent', create=True) as accept:
+            result, opened, calls, send_text, send_resume = self.run_hop(items=[item])
+        accept.assert_not_called()
+        send_resume.assert_not_called()
+        send_text.assert_not_called()
+        opened.assert_not_called()
+        self.assertEqual(result['brand_blocked'], 1)
+
+
+class Conv08PatternOnlyInTitleOrHrAdv(Conv08AdvBase):
+    def test_pattern_in_job_title_or_hr_name_does_not_block(self):
+        # 只看公司名：岗位名、HR 名里出现屏蔽词不算
+        self.cfg['filters'] = {'brand_block': ['示例云图']}
+        item = self.item()
+        item['jobName'] = '示例云图生态区域经理'
+        item['name'] = '示例云图招聘'
+        result, opened, _, _, _ = self.run_hop(items=[item])
+        opened.assert_called_once()
+        self.assertEqual(result['brand_blocked'], 0)
+        self.assertEqual(result['processed'], 1)
+
+
+class Conv08FromSelfStillSkippedAdv(Conv08AdvBase):
+    def test_blocked_brand_with_own_last_message_untouched(self):
+        # 最后一条是我方的会话照旧跳过：不建记录、不推送
+        self.cfg['filters'] = {'brand_block': ['示例云图']}
+        item = self.item(mine=True)
+        item['brandName'] = '示例云图'
+        result, opened, _, _, _ = self.run_hop(items=[item])
+        opened.assert_not_called()
+        self.assertEqual(result['brand_blocked'], 0)
+        self.assertFalse(any(line.startswith('🔒') for line in self.out))
+        self.assertFalse(self.path.exists() and conv_store.load(self.path))
+
+
+class Conv08CaseAndRegexAdv(Conv08AdvBase):
+    def test_regex_alternation_blocks_like_outbound(self):
+        # 与投递同口径：正则子串
+        self.cfg['filters'] = {'brand_block': ['云图|示例集团']}
+        item = self.item()
+        item['brandName'] = '某某示例集团有限公司'
+        result, opened, _, _, _ = self.run_hop(items=[item])
+        opened.assert_not_called()
+        self.assertEqual(result['brand_blocked'], 1)
+
+
+class Safety01AdvBase(T.ConversationRunTests):
+    """safety-01 对抗：复用对话替身夹具；不继承基类 test_ 方法。"""
+
+    def ledger(self, *rows):
+        import json as _json
+        (Path(self.tmp.name) / 'send_ledger.jsonl').write_text(
+            ''.join(_json.dumps(r, ensure_ascii=False) + '\n' for r in rows))
+
+    @staticmethod
+    def row(event_id, cmd, key, status):
+        return dict(event_id=event_id, cmd=cmd, conv_key=key, status=status,
+                    ts='2026-10-29 11:00', ts_epoch=1, text='虚构', text_sha256='0')
+
+
+for _name in [n for n in dir(T.ConversationRunTests) if n.startswith('test_')]:
+    setattr(Safety01AdvBase, _name, None)
+
+
+class Safety01AckReleasesConversationAdv(Safety01AdvBase):
+    def test_after_ack_conversation_processed_again(self):
+        # 核实（--sent 或 --not-sent）后同会话恢复处理，不能被永久跳过
+        it = self.item()
+        for terminal in ('sent', 'voided'):
+            with self.subTest(terminal=terminal):
+                self.setUp()
+                self.ledger(self.row('e1', 'conv_resume', it['conv_key'], 'pending'),
+                            self.row('e1', 'conv_resume', it['conv_key'], terminal))
+                result, opened, _, _, _ = self.run_hop(items=[it])
+                opened.assert_called_once()
+                self.assertEqual(result['pending_conversations'], 0)
+                self.assertFalse(any(l.startswith('⚠️ 待核实') for l in self.out))
+
+
+class Safety01LatestStatusWinsAdv(Safety01AdvBase):
+    def test_sent_then_unknown_rewrite_still_pending(self):
+        # 同一 event 最新一行是 unknown：仍按未核实处理
+        it = self.item()
+        self.ledger(self.row('e1', 'conv_text', it['conv_key'], 'sent'),
+                    self.row('e1', 'conv_text', it['conv_key'], 'unknown'))
+        result, opened, _, _, _ = self.run_hop(items=[it])
+        opened.assert_not_called()
+        self.assertEqual(result['pending_conversations'], 1)
+
+
+class Safety01TwoEventsOneLineAdv(Safety01AdvBase):
+    def test_two_pending_events_same_conversation_push_once(self):
+        it = self.item()
+        self.ledger(self.row('e1', 'conv_text', it['conv_key'], 'pending'),
+                    self.row('e2', 'conv_resume', it['conv_key'], 'unknown'))
+        result, opened, _, _, _ = self.run_hop(items=[it])
+        opened.assert_not_called()
+        self.assertEqual(sum(l.startswith('⚠️ 待核实') for l in self.out), 1)
+        self.assertEqual(result['pending_conversations'], 1)
+
+
+class Safety01PendingNotInListAdv(Safety01AdvBase):
+    def test_pending_conversation_outside_lookback_still_reported(self):
+        # 挂起的会话不在本跳列表里（超出 72h）：照样每跳提醒，且不影响其他会话
+        other = self.item(2)
+        self.ledger(self.row('e1', 'conv_resume', 'pair:虚构旧公司|虚构HR', 'pending'))
+        result, opened, _, _, _ = self.run_hop(items=[other])
+        opened.assert_called_once()
+        self.assertIn('⚠️ 待核实 pair:虚构旧公司|虚构HR（发送结果待核对，只停这个会话）', self.out)
+        self.assertTrue(result['ok'])
+
+
+class Heal01LoginWallOnRereadAdv(unittest.TestCase):
+    def test_login_wall_appearing_on_reread_stops_rereading(self):
+        # 第一次没渲染、第二次出现登录墙：立刻返回登录墙，不再读、不代登录
+        import outbound as O
+        br = Mock()
+        br.new_tab.return_value = 7
+        with patch.object(O.time, 'sleep'), \
+             patch.object(O, 'login_state', side_effect=[{}, {'login': True}, {'avatar': True}]) as ls:
+            tab, st = O.check_login(br, {})
+        self.assertEqual(ls.call_count, 2)
+        self.assertTrue(st.get('login'))
+        br.fill.assert_not_called()
+        br.click.assert_not_called()
+
+
+class Heal01NoExtraTabsAdv(unittest.TestCase):
+    def test_tab_retry_opens_at_most_two_tabs_and_no_nav(self):
+        # 开标签失败重试最多两次，不会在别的标签页上导航
+        import outbound as O
+        br = Mock()
+        br.new_tab.side_effect = [None, None, 9]
+        with patch.object(O.time, 'sleep'), patch.object(O, 'login_state') as ls:
+            tab, st = O.check_login(br, {})
+        self.assertIsNone(tab)
+        self.assertEqual(br.new_tab.call_count, 2)
+        br.nav.assert_not_called()
+        ls.assert_not_called()
+
+
+class Heal01NetworkStillHaltsAdv(unittest.TestCase):
+    def test_skip_network_after_retry_still_halts_hop(self):
+        # 重试后仍是 skip_network：停跳口径不变
+        import hunt_state as HS
+        self.assertEqual(HS.record_outcome({}, {}, {'encryptJobId': 'j1'}, 'skip_network', 'send', 'w'), 'halt')
+
+
+class Conv09RejectQuestionNotClosedAdv(unittest.TestCase):
+    def test_question_about_other_candidates_not_reject(self):
+        # 问句/非致歉的「其他候选人」不算拒信，40 行外不能被静默结束
+        for text in ('抱歉问下，你们还在找其他候选人吗', '我们也在看其他候选人，你什么时候方便聊？',
+                     '我们也在寻找其他背景的候选人，你的经历很匹配，方便聊聊'):
+            with self.subTest(text=text):
+                self.assertNotEqual(conv_rules.classify(text), 'reject')
+
+
+class Conv09RejectSnapshotOwnTextAdv(Conv08AdvBase):
+    def test_own_text_snapshot_that_looks_like_reject_not_closed(self):
+        # 40 行外快照是我方原话（如回绝语「不太匹配」）：按我方原话处理，不改成 closed
+        c = self.module()
+        own = '感谢您的关注！这个方向和我目前的求职方向不太匹配，就不打扰了'
+        import json as _json
+        (Path(self.tmp.name) / 'send_ledger.jsonl').write_text(_json.dumps(dict(
+            event_id='e1', cmd='conv_text', conv_key='pair:虚构其他|虚构HR', status='sent',
+            ts='2026-10-29 11:00', ts_epoch=1, text=own + '，祝招聘顺利！', text_sha256='0'),
+            ensure_ascii=False) + '\n')
+        item = self.item(text=own)
+        with patch.object(c.chat_dom, 'reveal_conversation', return_value={'ok': False, 'reason': 'not_found'}), \
+             patch.object(c.chat_dom, 'reset_list_scroll'):
+            result, _, _, _, _ = self.run_hop(items=[item], row_snapshots=lambda *a: [])
+        self.assertEqual(result['out_of_view_rejected'], 0)
+        self.assertEqual(result['out_of_view_own'], 1)
+        self.assertFalse(self.path.exists() and conv_store.load(self.path).get(item['conv_key']))
+
+
+def _c10_step(status, text, **kw):
+    import conv_store as _S
+    row = _S.new_record('fiction:1', 'reply', 'fiction-job', '虚构星港', '虚构小岚', '测试岗位', 1)
+    row['status'] = status
+    if status in ('engaged', 'round2'):
+        row['resume_sent_ts'] = row['asked_round1_ts'] = 10
+    ctx = {'cfg': {'targets': [{'city': '上海'}, {'city': '杭州'}]}, 'now_ts': 30, 'job_ok': True,
+           'extract': lambda m: {}, 'opener': lambda: '虚构开场，', 'history': [], 'job_city': '上海'}
+    ctx.update(kw)
+    return conv_rules.decide(row, [{'text': text, 'ts': 25}], ctx)
+
+
+class Conv10HrNamesOtherCityAdv(unittest.TestCase):
+    def test_location_question_naming_other_city_is_manual(self):
+        # 岗位数据写上海，但 HR 句子里点名南京/浦东：不替用户答「可以接受」
+        for text in ('工作地点在南京，能接受吗', '工作地点在浦东可以吗'):
+            with self.subTest(text=text):
+                actions, row = _c10_step('engaged', text)
+                self.assertEqual(row['status'], 'manual')
+                self.assertFalse(any(a['type'] == 'send_text' for a in actions))
+
+
+class Conv10EmploymentWithResignReasonAdv(unittest.TestCase):
+    def test_employment_plus_resign_reason_is_manual(self):
+        # 在职问句里夹着离职原因：不能只答在职就带问句过去
+        for text in ('目前在职吗？方便说下离职原因吗', '为什么想换工作？现在还在职吗'):
+            with self.subTest(text=text):
+                actions, row = _c10_step('engaged', text)
+                self.assertEqual(row['status'], 'manual')
+                self.assertFalse(any(a['type'] == 'send_text' for a in actions))
+
+
+class Conv10OutreachWithPhoneAdv(unittest.TestCase):
+    def test_outreach_with_phone_request_is_manual(self):
+        # 冷招呼里要电话/微信：红线优先，转人工
+        for text in ('请问还在看机会吗？方便留个电话吗', '对你的经历很感兴趣，加个微信聊'):
+            with self.subTest(text=text):
+                actions, row = _c10_step('new', text)
+                self.assertEqual(row['status'], 'manual')
+                self.assertFalse(any(a['type'] == 'send_text' for a in actions))
+
+
+class Conv10AckThenQuestionSameBatchAdv(unittest.TestCase):
+    def test_ack_then_cold_question_in_same_batch(self):
+        # 同一批「好的」+「请问在考虑新的工作机会吗」：确认语静等，招呼照常问第一轮
+        import conv_store as _S
+        row = _S.new_record('fiction:1', 'inbound', 'fiction-job', '虚构星港', '虚构小岚', '测试岗位', 1)
+        ctx = {'cfg': {}, 'now_ts': 30, 'job_ok': True, 'extract': lambda m: {},
+               'opener': lambda: '虚构开场，', 'history': []}
+        actions, row = conv_rules.decide(row, [{'text': '好的', 'ts': 24},
+                                               {'text': '请问在考虑新的工作机会吗？', 'ts': 25}], ctx)
+        self.assertNotEqual(row['status'], 'manual')
+        self.assertEqual(sum(a['type'] == 'send_text' for a in actions), 1)
+
+
+class Conv11OldestOpenFailsAdv(Conv06AdvBase):
+    def test_oldest_persistent_failure_uses_one_slot_only(self):
+        # 最旧会话每跳都处理不了（视窗里重复两行 → row_missing）：只占 1 个名额，后面的照常处理
+        c = self.module()
+        self.cfg['conversation']['per_hop'] = 2
+        items = [self.item(1, age=90), self.item(2, age=50), self.item(3, age=10)]
+        rows = [{'conv_key': 'id:fiction1', 'receipt': False}] * 2 + [
+            {'conv_key': it['conv_key'], 'receipt': False} for it in items[1:]]
+        with patch.object(c.chat_dom, 'reveal_conversation') as rev:
+            result, opened, _, _, _ = self.run_hop(items=items, row_snapshots=lambda *a: list(rows))
+        rev.assert_not_called()
+        self.assertEqual(result['row_missing'], 1)
+        self.assertEqual([k.kwargs['conv_key'] for k in opened.call_args_list], ['id:fiction2'])
+        self.assertEqual(result['processed'], 1)
+
+
+class Conv11BlockedAndPendingNotRevealedAdv(Conv08AdvBase):
+    def test_oldest_blocked_or_pending_never_revealed(self):
+        # 最旧的是屏蔽公司 / 账本挂起会话：在选候选阶段就排除，不滚动揭示、不占名额
+        import json as _json
+        c = self.module()
+        self.cfg['filters'] = {'brand_block': ['示例云图']}
+        self.cfg['conversation']['per_hop'] = 1
+        blocked = self.item(1, age=90)
+        blocked['brandName'] = '示例云图'
+        pending = self.item(2, age=80)
+        fresh = self.item(3, age=10)
+        (Path(self.tmp.name) / 'send_ledger.jsonl').write_text(_json.dumps(dict(
+            event_id='e1', cmd='conv_text', conv_key=pending['conv_key'], status='pending',
+            ts='2026-10-29 11:00', ts_epoch=1, text='虚构', text_sha256='0'), ensure_ascii=False) + '\n')
+        visible = [{'conv_key': fresh['conv_key'], 'receipt': False}]
+        with patch.object(c.chat_dom, 'reveal_conversation') as rev, \
+             patch.object(c.chat_dom, 'reset_list_scroll'):
+            result, opened, _, _, _ = self.run_hop(items=[blocked, pending, fresh],
+                                                   row_snapshots=lambda *a: list(visible))
+        rev.assert_not_called()
+        self.assertEqual([k.kwargs['conv_key'] for k in opened.call_args_list], [fresh['conv_key']])
+        self.assertEqual(result['brand_blocked'], 1)
+        self.assertEqual(result['pending_conversations'], 1)
+
+
+class Heal02SwitchFlipsToOnAdv(unittest.TestCase):
+    def test_unknown_then_on_with_fix_clicks_only_after_explicit_on(self):
+        # 第一次读不到、第二次读到「开」：返回 on 系列，修复点击只在读到明确的开之后发生一次
+        import outbound as O
+        br = Mock()
+        on = '[{"t":"启用招呼语","on":true,"hid":"1","aria":null,"checked":true}]'
+        off = '[{"t":"启用招呼语","on":false,"hid":"0","aria":null,"checked":false}]'
+        texts = ['', on, 'clicked', off]
+        br.js.side_effect = [{'text': t} for t in texts]
+        with patch.object(O.time, 'sleep'):
+            result = O.greeting_switch(br, 1, fix=True)
+        self.assertEqual(result, 'auto_greeting_off')
+        clicks = [c for c in br.js.call_args_list if 'hit.click' in c.args[1]]
+        self.assertEqual(len(clicks), 1)
+        self.assertEqual(br.nav.call_count, 1)
+
+
+class Heal02EvalNoiseAdv(unittest.TestCase):
+    def test_non_json_reads_never_count_as_off(self):
+        # 三次都读到非 JSON/空数组/没有招呼行：返回 unknown，不能被当成关
+        import outbound as O
+        br = Mock()
+        br.js.side_effect = [{'text': 'eval_failed'}, {'text': '[]'},
+                             {'text': '[{"t":"别的开关","on":false}]'}]
+        with patch.object(O.time, 'sleep'):
+            self.assertEqual(O.greeting_switch(br, 1), 'auto_greeting_unknown')
+        self.assertEqual(br.nav.call_count, 2)
+
+
+class Conv12NegationAcrossPunctuationAdv(unittest.TestCase):
+    def test_negation_word_and_experience_in_different_clauses_not_hit(self):
+        # 否定词和「经验」分在不同分句（「没问题，我有经验」）不算自我否定
+        import message_policy as P
+        for text in ('没问题，我有相关经验', '无论线上线下，渠道经验都有', '没错，7年BD经验'):
+            with self.subTest(text=text):
+                self.assertFalse(P.self_negation(text))
+
+
+class Conv12NegativeExperienceAnswerFallsToManualAdv(unittest.TestCase):
+    def test_experience_question_with_negative_llm_answer_goes_manual(self):
+        # HR 问经验，LLM 答句自我否定：答句不合格 → 转人工，不发送
+        import conv_store as _S
+        row = _S.new_record('fiction:1', 'reply', 'fiction-job', '虚构星港', '虚构小岚', '测试岗位', 1)
+        row.update(status='engaged', resume_sent_ts=10, asked_round1_ts=10)
+        cfg = {'user': {'greeting': {'facts': ['做过五年示例行业BD', '暂无虚构行业经验']}}}
+        ctx = {'cfg': cfg, 'now_ts': 30, 'job_ok': True, 'extract': lambda m: {},
+               'opener': lambda: '虚构开场，', 'history': [], 'answer': lambda t: '暂无虚构行业经验。'}
+        actions, row = conv_rules.decide(row, [{'text': '有没有虚构行业经验？', 'ts': 25}], ctx)
+        self.assertEqual(row['status'], 'manual')
+        self.assertFalse(any(a['type'] == 'send_text' for a in actions))
+
+
+# ---- conv-13 置顶对抗用例（每种情形独立 class；夹具复用 test_conv13_pin.PinBase，虚构数据） ----
+import test_conv13_pin as _p13
+
+
+class Conv13SameNameSameJobTwoRowsAdv(_p13.PinConversationDomTests):
+    """同名同公司同岗两行（只是 uniqueId 不同、item 不带 friendId）：不唯一，不置顶。"""
+    def test_two_identical_rows_never_set_top(self):
+        rows = [_p13.boss(1, friendId=None), _p13.boss(1, uniqueId='u1-dup', friendId=None)]
+        result, calls = self.run_dom(rows)
+        self.assertEqual(result, {'ok': False, 'reason': 'ambiguous'})
+        self.assertEqual(calls, [])
+
+
+for _name in [n for n in dir(_p13.PinConversationDomTests) if n.startswith('test_')]:
+    setattr(Conv13SameNameSameJobTwoRowsAdv, _name, None)
+
+
+class Conv13PinnedConversationNotRepliedAdv(_p13.PinBase):
+    def test_pinned_manual_with_new_hr_message_gets_no_send_and_no_repin(self):
+        # 已置顶的需人工会话 HR 又发新消息：系统不回、不再调置顶
+        self.store(self.pinrec(1, self.ts - 3600, pinned_ts=self.ts - 1800))
+        result, pin = self.pin_hop(items=[dict(self.item(1, text='虚构追问'), isTop=1)],
+                                   history=self.history(text='虚构追问'))
+        pin.assert_not_called()
+        self.assertEqual(result['processed'], 0)
+        self.assertEqual(self.saved()['status'], 'manual')
+        self.assertIsNone(self.saved()['pin']['done_ts'])
+
+
+class Conv13UnpinnedStaysDoneAcrossHopsAdv(_p13.PinBase):
+    def test_user_unpinned_not_repinned_next_hops(self):
+        self.store(self.pinrec(1, self.ts - 3600, pinned_ts=self.ts - 1800))
+        _, pin = self.pin_hop(items=[dict(self.item(1), isTop=0)])
+        pin.assert_not_called()
+        for tab in (20, 30):
+            self.br.new_tab.side_effect = [tab]
+            _, pin = self.pin_hop(items=[dict(self.item(1), isTop=0)])
+            pin.assert_not_called()
+        self.assertEqual(self.saved()['pin']['done_by'], 'user_unpinned')
+
+
+class Conv13BacklogRevealLandsOnOtherRowAdv(_p13.PinBase):
+    def test_reveal_ok_but_window_shows_someone_else_never_pins(self):
+        self.store(self.pinrec(1, self.ts - 3600))
+        stranger = [{'conv_key': 'id:fiction-stranger', 'receipt': False}]
+        result, pin = self.pin_hop(items=[self.item(1)],
+                                   reveal=Mock(return_value={'ok': True, 'index': 60}),
+                                   row_snapshots=lambda *a: list(stranger))
+        pin.assert_not_called()
+        self.assertEqual(self.saved()['pin']['failures'], 1)
+        self.assertEqual(result['pinned'], 0)
+
+
+class Conv13SwitchOffNeverCallsAdv(_p13.PinBase):
+    def test_switch_off_with_backlog_and_new_manual_never_touches_pin(self):
+        self.cfg['conversation']['pin_manual'] = False
+        self.store(self.pinrec(2, self.ts - 3600))
+        boom = Mock(side_effect=AssertionError('开关关时不得调用置顶'))
+        result, _ = self.pin_hop(pin=boom, items=[self.item(1), self.item(2)], text_result='manual_required')
+        boom.assert_not_called()
+        self.assertEqual(result['pinned'] + result['pin_failed'] + result['pin_backlog'], 0)
+        self.assertNotIn('置顶', result['overview'])
+
+
+class Conv13PendingConversationNotPinnedAdv(_p13.PinBase):
+    def test_ledger_pending_key_skipped_by_backlog(self):
+        c = self.module()
+        self.store(self.pinrec(1, self.ts - 3600))
+        with patch.object(c.SS, 'conv_pending', return_value={'id:fiction1'}):
+            result, pin = self.pin_hop(items=[self.item(1), self.item(2)])
+        self.assertFalse(any(c_.args[2]['name'] == '虚构HR1' for c_ in pin.call_args_list))
+
+
+class Conv13PendingVerificationStopsBacklogAdv(_p13.PinBase):
+    def test_send_pending_verification_skips_backlog(self):
+        self.store(self.pinrec(2, self.ts - 3600))
+        result, pin = self.pin_hop(items=[self.item(1), self.item(2)], text_result='pending_verification')
+        self.assertTrue(result['pending_verification'])
+        pin.assert_not_called()
+
+
+class Conv13IsTopNotExplicitlyFalseAdv(_p13.PinBase):
+    def test_true_none_or_string_is_top_not_counted_as_unpinned(self):
+        for value in (True, 1, None, '0', ''):
+            with self.subTest(value=value):
+                self.store(self.pinrec(1, self.ts - 3600, pinned_ts=self.ts - 1800))
+                self.br.new_tab.side_effect = [10]
+                item = self.item(1)
+                if value is not None:
+                    item['isTop'] = value
+                result, _ = self.pin_hop(items=[item])
+                self.assertIsNone(self.saved()['pin']['done_ts'])
+                self.assertEqual(result['pin_done'], 0)
+
+
+class Conv13FailedPinLineNotSwallowedAdv(_p13.PinBase):
+    def test_one_pinned_one_failed_only_pinned_line_replaced(self):
+        def pin(br, tab, item):
+            return {'ok': True} if item['name'] == '虚构HR1' else {'ok': False, 'reason': 'ambiguous'}
+        result, _ = self.pin_hop(pin=Mock(side_effect=pin), items=[self.item(1), self.item(2, age=5)],
+                                 text_result='manual_required')
+        notes = result['notifications']
+        self.assertTrue(any(n.startswith('🙋 需人工 虚构公司2') for n in notes))
+        self.assertFalse(any(n.startswith('🙋 需人工 虚构公司1') for n in notes))
+        block = [n for n in notes if n.startswith('📌')]
+        self.assertEqual(len(block), 1)
+        self.assertNotIn('虚构公司2', block[0])
+        # 📌 块放在原第一条被替代行的位置（在仍保留的 🙋 之前）
+        self.assertLess(notes.index(block[0]), next(i for i, n in enumerate(notes) if '虚构公司2' in n))
+
+
+class Conv13DryNeverWritesAdv(_p13.PinBase):
+    def test_dry_with_legacy_records_no_write_no_call(self):
+        legacy = self.record(self.item(1), status='manual')
+        conv_store.save(self.path, {legacy['conv_key']: legacy})
+        before = self.path.read_text()
+        result, pin = self.pin_hop(items=[self.item(1)], dry=True)
+        pin.assert_not_called()
+        self.assertEqual(self.path.read_text(), before)
+        self.assertEqual(result['pin_plan'], ['id:fiction1'])
+
+
+# ---- conv-13b 对抗用例（真机：setTop 传 1、置顶行离开 dataSources、补登限 lookback、一次性迁移） ----
+import test_conv13b_pin_fix as _p13b
+
+
+class _Conv13bDomBase(_p13b.RealPageTests):
+    pass
+
+
+for _name in [n for n in dir(_p13b.RealPageTests) if n.startswith('test_')]:
+    setattr(_Conv13bDomBase, _name, None)
+
+
+class Conv13bDuplicateRowAfterMoveAdv(_Conv13bDomBase):
+    def test_two_matching_rows_after_set_top_not_confirmed(self):
+        # 置顶后同身份出现两行（顶部一行 + 旧行残留）：不能认成功
+        data = self.run_dom([_p13.boss(1)], mode='dup', wait_ms=400)
+        self.assertEqual(data['r'], {'ok': False, 'reason': 'not_confirmed'})
+        self.assertEqual(data['calls'], [['setTop', 'u1', 1]])
+
+
+class Conv13bForeignTopRowNotConfirmAdv(_Conv13bDomBase):
+    def test_someone_else_already_top_and_ours_rejected(self):
+        data = self.run_dom([_p13.boss(3, isTop=1), _p13.boss(2, isTop=1), _p13.boss(1)],
+                            mode='reject', wait_ms=400)
+        self.assertEqual(data['r'], {'ok': False, 'reason': 'not_confirmed'})
+        self.assertEqual(data['calls'], [['setTop', 'u1', 1]])
+
+
+class Conv13bNoDestructiveCallOnRealPageAdv(_Conv13bDomBase):
+    def test_only_set_top_called_even_when_rejected(self):
+        for mode in ('normal', 'reject', 'late', 'class_only'):
+            with self.subTest(mode=mode):
+                data = self.run_dom([_p13.boss(1)], mode=mode, wait_ms=400)
+                self.assertEqual([c[0] for c in data['calls']], ['setTop'])
+
+
+class Conv13bStaleLegacyPinNeverPinnedAdv(_p13.PinBase):
+    def test_out_of_window_conv13_pin_dropped_even_with_switch_on(self):
+        row = self.pinrec(1, self.ts - 8 * 86400, failures=3)
+        row['pin'].pop('pin_migrated_13b')
+        row['last_seen'] = {'ts': self.ts - 8 * 86400, 'text': '您的附件简历已发送给Boss'}
+        self.store(row)
+        # audit-01 U1：列表快照就是那条旧消息（没有新消息），旧置顶照样撤掉、不置顶
+        result, pin = self.pin_hop(items=[self.item(1, text='您的附件简历已发送给Boss', age=8 * 86400)])
+        pin.assert_not_called()
+        self.assertIsNone(self.saved()['pin'])
+        self.assertFalse(any('置顶' in n for n in result['notifications']))
+
+
+class Audit01StaleLegacyPinThenFreshHrMessageAdv(_p13.PinBase):
+    def test_stale_pin_dropped_but_fresh_hr_message_repins_once(self):
+        # audit-01 U1：过期旧置顶撤掉；同一会话又来新的 HR 消息 → 提醒一次、重新登记并置顶一次
+        row = self.pinrec(1, self.ts - 8 * 86400, failures=3)
+        row['pin'].pop('pin_migrated_13b')
+        row['last_seen'] = {'ts': self.ts - 8 * 86400, 'text': '您的附件简历已发送给Boss'}
+        self.store(row)
+        result, pin = self.pin_hop(items=[self.item(1, text='方便明天电话聊聊吗', age=30)])
+        self.assertEqual(pin.call_count, 1)
+        saved = self.saved()
+        self.assertEqual((saved['status'], saved['pin']['reason']), ('manual', 'manual_new'))
+        self.assertIsNotNone(saved['pin']['pinned_ts'])
+        self.assertEqual(result['manual_new'], 1)
+        result, pin = self.pin_hop(items=[self.item(1, text='方便明天电话聊聊吗', age=30)])
+        pin.assert_not_called()
+        self.assertEqual(result['manual_new'], 0)
+
+
+class Conv13bFutureTimestampNotInWindowAdv(_p13.PinBase):
+    def test_last_seen_in_future_not_migrated(self):
+        self.cfg['conversation']['pin_manual'] = False
+        row = self.record(self.item(1), status='manual')
+        row['last_seen'] = {'ts': self.ts + 86400, 'text': '虚构'}
+        self.store(row)
+        self.pin_hop(items=[self.item(9)])
+        self.assertFalse(isinstance(self.saved().get('pin'), dict))
+
+
+class Conv13bReregisteredKeepsMarkerAdv(_p13.PinBase):
+    def test_reregistered_pin_failures_not_reset_by_13b(self):
+        c = self.module()
+        row = self.pinrec(1, self.ts - 3600, pinned_ts=self.ts - 1800, done_ts=self.ts - 900)
+        c._want_pin(row, 'manual', '虚构新话', self.ts - 60, self.ts - 60)
+        row['pin']['failures'] = 2
+        row['last_seen'] = {'ts': self.ts - 60, 'text': '虚构新话'}
+        self.store(row)
+        self.cfg['conversation']['pin_manual'] = False
+        self.pin_hop(items=[self.item(9)])
+        self.assertEqual(self.saved()['pin']['failures'], 2)
+
+
+class Conv13bMigrationOnlyTouchesPinAdv(_p13.PinBase):
+    def test_13b_reset_keeps_rest_of_record(self):
+        self.cfg['conversation']['pin_manual'] = False
+        row = self.pinrec(1, self.ts - 3600, failures=3)
+        row['pin'].pop('pin_migrated_13b')
+        row['last_seen'] = {'ts': self.ts - 3600, 'text': '虚构'}
+        self.store(row)
+        self.pin_hop(items=[self.item(9)])
+        saved = self.saved()
+        expected = copy.deepcopy(row)
+        expected['pin'].update(failures=0, pin_migrated_13b=True)
+        self.assertEqual(saved, expected)
+
+
+# ---- conv-13c 对抗用例：推送原话去 <copy> 标记，不误伤正文 ----
+class Conv13cNoFalseStripAdv(unittest.TestCase):
+    def test_plain_text_with_ampersand_and_angle_kept(self):
+        import conversation as _c
+        for text in ('负责研发R&D', '融资<A轮', '经验要求<3年>以上', 'A&B 合作', '提成>10%'):
+            with self.subTest(text=text):
+                self.assertEqual(_c._push_text(text), text)
+
+
+class Conv13cTagWithAttributesAdv(unittest.TestCase):
+    def test_attributes_and_nested_tags_keep_inner_text(self):
+        import conversation as _c
+        self.assertEqual(_c._push_text('看&lt;a href="x"&gt;<b>岗位说明</b>&lt;/a&gt;'), '看岗位说明')
+
+
+class Conv13cTruncatedTailAdv(unittest.TestCase):
+    def test_half_tag_or_entity_at_end_removed(self):
+        import conversation as _c
+        for text in ('微信号 abc&lt;/co', '微信号 abc&l', '微信号 abc</cop', '微信号 abc&lt;copy'):
+            with self.subTest(text=text):
+                self.assertEqual(_c._push_text(text), '微信号 abc')
+
+
+class Conv13cButtonLinesStillDroppedAdv(unittest.TestCase):
+    def test_card_buttons_still_removed_after_markup_strip(self):
+        import conversation as _c
+        self.assertEqual(_c._push_text('<copy>要一份简历</copy>\n拒绝\n同意'), '要一份简历')
+
+
+# ---- cleanup-02：旧回消息链路移除后的对抗用例（虚构数据） ----
+import test_cleanup02_legacy_reply as _c02
+
+LEGACY_ALL_ON = {'auto_reply': {'enabled': True, 'dry': False, 'auto_send': True, 'use_llm': True,
+                                'daily_cap': 99, 'max_tries': 99},
+                 'interview_auto_reply': True,
+                 'followup': {'enabled': True, 'after_hours': 0}}
+
+
+class Cleanup02InboxNeverGeneratesAdv(_c02.InboxReadOnlyTests):
+    """旧开关全开（含 dry=false、use_llm、跟进 0 小时）：inbox 不生成文案、不调模型、不点、不记账。"""
+
+    def test_legacy_all_on_never_calls_model_or_sends(self):
+        import greet as _g
+        with patch.object(_g, 'generate') as gen, patch.object(_g, '_generate_raw') as raw:
+            data, st, out, mocks, before, after = self.run_inbox(copy.deepcopy(LEGACY_ALL_ON))
+        gen.assert_not_called(); raw.assert_not_called()
+        for mock in mocks.values():
+            mock.assert_not_called()
+        self.browser.click.assert_not_called(); self.browser.fill.assert_not_called()
+        self.assertEqual(before, after)
+        self.assertEqual(st.get('followed'), [])
+        self.assertEqual(st.get('replied'), [])
+
+
+for _name in [n for n in dir(_c02.InboxReadOnlyTests) if n.startswith('test_')]:
+    setattr(Cleanup02InboxNeverGeneratesAdv, _name, None)
+
+
+class Cleanup02AdvBase(T.ConversationRunTests):
+    """复用对话替身夹具；不继承基类 test_ 方法。"""
+    pass
+
+
+for _name in [n for n in dir(T.ConversationRunTests) if n.startswith('test_')]:
+    setattr(Cleanup02AdvBase, _name, None)
+
+
+class Cleanup02ChatUnaffectedByLegacySwitchesAdv(Cleanup02AdvBase):
+    def test_chat_still_handles_resume_request_with_legacy_switches_on(self):
+        # 旧开关残留在配置里：对话模块照常工作（回第一轮 + 发简历），不受影响
+        self.cfg['inbox'] = copy.deepcopy(LEGACY_ALL_ON)
+        text = '可以投递的～辛苦发一份最新版本的附件简历吗'
+        result, _, calls, _, _ = self.run_hop(items=[self.item(text=text)], history=self.history(text=text))
+        self.assertEqual([call[0] for call in calls], ['text', 'resume'])
+        self.assertEqual(result['resume_sent'], 1)
+
+
+class StatusReaderEmptyPanelAdv(unittest.TestCase):
+    """身份对上但面板没有任何气泡：不能凭快照时间推断归属（side 必须为 None）。"""
+
+    def test_identity_match_without_messages_stays_unknown(self):
+        import boss_hunt as _b
+        import chat_dom as _cd
+        row = {'conv_key': 'pair:虚构甲|虚构HR', 'brand': '虚构甲', 'boss': '虚构HR', 'last_ts': 100}
+        with patch.object(_cd, 'conversation_rows', return_value=[row]), \
+                patch.object(_cd, 'open_by_index', return_value=('ok', '', [])), \
+                patch.object(_cd, 'active_conversation', return_value={'conv_key': row['conv_key'], 'messages': []}):
+            data = _b.read_status_message(Mock(), 1, row)
+        self.assertIsNone(data['side'])
+        self.assertEqual(data['owner'], 'unknown')

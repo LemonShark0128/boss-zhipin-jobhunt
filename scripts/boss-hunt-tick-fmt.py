@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""投递跳的播报格式化：读 tick --json 的 stdout，输出要推到微信的文本。
+"""投递跳的播报格式化：读 tick --json 的 stdout，输出要推送给用户的文本。
 
 规则（用户 2026-10-28 明确要"每跳都能看到"）：
 - 窗口内每跳至少一行；0 发出时补一行跳过原因
@@ -37,7 +37,7 @@ def render(d):
     err = str(d.get("error") or "")
     if err.startswith("unresolved_send"):
         lines.append("⛔ 有待核对的发送，投递和回复全部暂停")
-        lines.append("   处理：python3 boss_hunt.py ledger-ack --list")
+        lines.append("   先确认那个 HR 有没有收到消息，我再核对放行")
     elif "captcha" in err:
         lines.append("⚠️ 撞验证码，本轮停（额度留到下跳）")
     elif d.get("ok") is False:
@@ -54,11 +54,14 @@ def render(d):
     today = d.get("today_sent") or {}
     count = int(today.get("count") or 0)
     if count > 0 and d.get("window"):
-        items = (today.get("items") or [])[:5]
-        brands = "、".join("%s(%s)" % (item.get("brand", ""), item.get("grade", "")) for item in items)
+        items = (today.get("items") or [])[:8]
+        lines.append("📋 今日已发 %d" % count)
+        for item in items:
+            brand = (item.get("brand") or "").strip()
+            job = (item.get("name") or "").strip()
+            lines.append("· %s ｜ %s" % (brand, job) if job else "· %s" % brand)
         if count > len(items):
-            brands += "＋%d" % (count - len(items))
-        lines.append("📋 今日已发 %d：%s" % (count, brands))
+            lines.append("· 另有 %d 个未列出" % (count - len(items)))
     caught_up = (d.get("catch_up") or {}).get("window")
     for missed in d.get("missed") or []:
         if caught_up and missed.get("window") == caught_up:
@@ -71,12 +74,6 @@ def render(d):
         sent = int(send.get("sent") or 0)
         head = "📮 %s 跳｜发出 %d｜今日 %d/%d" % (
             win, sent, int(send.get("day_count") or 0), int(send.get("daily_cap") or 0))
-        if sent:
-            by_grade = send.get("by_grade")
-            if isinstance(by_grade, dict):
-                parts = ["%s %d" % (k, v) for k, v in by_grade.items() if isinstance(v, int)]
-                if parts:
-                    head += "（" + " · ".join(parts) + "）"
         lines.append(head)
         if not sent:
             counts = {}

@@ -109,8 +109,8 @@ class ConversationRunTests(unittest.TestCase):
             p(c.chat_dom, 'conversation_rows', side_effect=row_snapshots, return_value=[{
                 'conv_key': it['conv_key'], 'receipt': (receipts or {}).get(it['conv_key'], False)
             } for it in items])
-            p(c.outbound, 'read_jd', return_value=jd)
-            self.cleanup = p(c.outbound, 'cleanup_browser', return_value=2)
+            p(c.jd_page, 'read_jd', return_value=jd)
+            self.cleanup = p(c.CM, 'cleanup_browser', return_value=2)
             p(c.hunt_filter, 'load_jobs', return_value=[])
             p(c.hunt_filter, 'judge', return_value=('pass' if job_ok else 'reject', '虚构原因'))
             p(c.hunt_filter, 'grade_with_jd', return_value={'grade': 'B'})
@@ -671,8 +671,8 @@ console.log(JSON.stringify(eval(process.argv[1])));
             {'code': 0, 'zpData': {'result': [self.item()] if index == 0 else []}})}
         with patch.object(c.chat_dom, 'conversation_rows', return_value=[{'conv_key': 'id:fiction1'}]), \
              patch.object(c.chat_dom, 'open_by_index', return_value=('ok', '', self.history(inbound=True))), \
-             patch.object(c.outbound, 'read_jd', side_effect=AssertionError('cached JD reread')), \
-             patch.object(c.outbound, 'cleanup_browser'), \
+             patch.object(c.jd_page, 'read_jd', side_effect=AssertionError('cached JD reread')), \
+             patch.object(c.CM, 'cleanup_browser'), \
              patch.object(c.conv_llm, 'opener', return_value='虚构对口句，'), \
              patch.object(c.conv_actions, 'send_text', return_value='sent'), \
              patch.object(c.conv_actions, 'send_resume', return_value='sent'):
@@ -805,7 +805,8 @@ console.log(JSON.stringify(eval(process.argv[1])));
                                               row_snapshots=[rows, rows, rows[::-1]])
         self.assertEqual(result['processed'], 2)
         self.assertEqual([(call.args[2], call.kwargs['conv_key']) for call in opened.call_args_list],
-                         [(0, 'id:fiction1'), (0, 'id:fiction2')])
+                         # conv-11：最旧优先，仍使用每次刷新后的实际索引。
+                         [(1, 'id:fiction2'), (1, 'id:fiction1')])
 
     def test_missing_or_duplicate_fresh_row_is_counted_and_skipped(self):
         for fresh_rows in ([], [{'conv_key': 'id:fiction1'}]*2):
@@ -813,12 +814,16 @@ console.log(JSON.stringify(eval(process.argv[1])));
                 self.br.new_tab.side_effect = [10]
                 result, opened, calls, _, _ = self.run_hop(
                     row_snapshots=[[{'conv_key': 'id:fiction1'}], fresh_rows])
-                self.assertEqual(result.get('row_missing'), 1)
-                self.assertIn('row_missing 1', result['overview'])
-                self.assertIn('row_missing 1', '\n'.join(self.out))
+                # conv-11：缺行先揭示，失败计 reveal_failed；重复行仍计 row_missing。
+                missing = int(bool(fresh_rows))
+                self.assertEqual(result.get('row_missing'), missing)
+                self.assertEqual(result['reveal_failed'], int(not fresh_rows))
+                self.assertIn('row_missing %d' % missing, result['overview'])
+                self.assertIn('row_missing %d' % missing, '\n'.join(self.out))
                 opened.assert_not_called()
                 self.assertFalse(calls)
-                self.assertFalse(self.path.exists())
+                # conv-11：缺行揭示失败先通知落盘；后续重复行子用例保留该去重记录。
+                self.assertTrue(self.path.exists())
 
     def test_empty_network_retries_same_tab_once_then_succeeds(self):
         c = self.module()
@@ -933,7 +938,7 @@ console.log(JSON.stringify(eval(process.argv[1])));
              patch.object(boss.HC, 'now_local', return_value=self.now), \
              patch.object(boss.O, 'check_login', return_value=(10, {'avatar': True})), \
              patch.object(c.chat_dom, 'open_by_index') as opened, \
-             patch.object(c.outbound, 'cleanup_browser', side_effect=clean_owned_tabs) as cleanup, \
+             patch.object(c.CM, 'cleanup_browser', side_effect=clean_owned_tabs) as cleanup, \
              redirect_stdout(output):
             code = boss.cmd_chat(args)
         data = json.loads(output.getvalue())

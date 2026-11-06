@@ -19,9 +19,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import boss_hunt as B
 import outbound as O
 import send_safety as S
+import chat_send as CS
 
 TEXT = '您好，我做过 5 年渠道，方便聊两句吗？'
-JOB = {'encryptJobId': 'j', 'jobName': '潮玩渠道经理', 'brandName': '戊示例科技'}
+JOB = {'encryptJobId': 'j', 'jobName': '虚构渠道经理', 'brandName': '戊示例科技'}
 
 # 真实页面形状：按钮 disabled 由框架模型 state.model 决定，DOM 文本无关。
 FIXTURE = r'''
@@ -88,7 +89,7 @@ const window={getSelection:()=>({removeAllRanges(){},addRange(){}})};
 class Page:
     def __init__(self, **kwargs):
         self.state = dict(path='/web/geek/chat', key='1', text='', model='',
-                          panelText='何女士 戊示例科技 HRBP 更多 潮玩渠道经理 18-35K',
+                          panelText='虚构HR 戊示例科技 HRBP 更多 虚构渠道经理 20-30K',
                           panels=1, visible=True, buttons=1, bubble=True,
                           defer=0, enterSends=False,
                           messages=[{'id':'h1','who':'friend','text':'方便聊聊吗？','ts':'100'}])
@@ -243,7 +244,7 @@ class Round8(unittest.TestCase):
 
     def test_greeting_falls_back_to_enter_when_button_never_unlocks(self):
         br = NoBridgeFill(path='/job_detail/j.html', enterSends=True)
-        with patch.object(B.CS, 'type_into_chat', side_effect=lambda br_, tab, text: (
+        with patch.object(CS, 'type_into_chat', side_effect=lambda br_, tab, text: (
                 br_.state.update(text=text), {'ok': True})[-1]):
             self.assertEqual(self.greet(br), 'sent')
         self.assertEqual(br.clicks, 0, '按钮 disabled 时不能点')
@@ -252,7 +253,7 @@ class Round8(unittest.TestCase):
 
     def test_greeting_stays_pending_when_click_and_enter_both_fail(self):
         br = NoBridgeFill(path='/job_detail/j.html')   # Enter 也不发送
-        with patch.object(B.CS, 'type_into_chat', side_effect=lambda br_, tab, text: (
+        with patch.object(CS, 'type_into_chat', side_effect=lambda br_, tab, text: (
                 br_.state.update(text=text), {'ok': True})[-1]), \
              self.assertRaisesRegex(RuntimeError, 'unresolved_send'):
             self.greet(br)

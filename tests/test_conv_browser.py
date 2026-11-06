@@ -197,7 +197,7 @@ process.stdout.write(JSON.stringify({result,resumes:resumes.map(b=>b.id),confirm
         self.assertEqual(execute(capture.expr, dialog=True, confirms=1, hidden=True)['result'], {})
 
     def test_dom_boundaries(self):
-        names = 'CHAT_URL NEW_GREET_TAB ONLY_CHAT_TAB goto_tab clean_item list_texts count_list CONVERSATION_JS conversation_rows conversation_norm source_conversation_key select_conversation active_conversation open_by_index normalized_history history_fingerprint atomic_chat_click open_and_read'.split()
+        names = 'CHAT_URL CONVERSATION_JS conversation_rows conversation_norm source_conversation_key select_conversation active_conversation open_by_index normalized_history atomic_chat_click'.split()
         for name in names:
             self.assertTrue(hasattr(CD, name)); self.assertFalse(hasattr(B, name))
         tree = ast.parse(Path(CD.__file__).read_text())

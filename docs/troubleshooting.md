@@ -89,15 +89,16 @@
   `time.strftime` 会算错日界（下午额度凭空重置）。
 - `runs.log` 行首时间用配置时区；如果混入系统本地时间，别按日期前缀重新算额度，
   以「今日累计 N/M」为准。
-- 上限要**两处同步**：`sending.daily_cap` 和定时脚本里每跳的 `--send N`
-  （`run` 默认取 `schedule.per_window`）。只改一个会出现「上限写 20、实际只发 12」。
+- 上限只在配置里改：`sending.daily_cap`、`sending.grade_quota`、`sending.max_per_window`。定时投递跳跑的是
+  `tick`，不带 `--send N`；手动 `send N` / `run --send N` 的 N 只是本次上限，不覆盖日/窗口配额。
+  本跳预算可先用 `tick --dry-run` 看（与真发同一个 `send_budget` 计算）。
 
 ## 收件箱
 
 - 数字不对：打开消息页会把未读清零，`unreadMsgCount` 永远读到 0。
   只能用 `lastMessageInfo.msgTime` + `fromId != myuid`。
-- 回复发错人：`reply_in_chat()` 靠会话标题核对公司名，读不到标题就放弃（`wrong_conv`）。
-  这是**有意的保险**：宁可这条没回、让用户手工补，也不要发给不相干的人。
+- 回复发错人：对话模块发送前在同一次点击里核对会话身份（`chat_dom.atomic_chat_click` 比对 conv_key，
+  不一致返回 `identity_changed` 不发）。这是**有意的保险**：宁可这条没回、让用户手工补，也不要发给不相干的人。
 - 系统消息（「您的附件简历已发送」「对方已同意」）不是 HR 说话，已被
   `inbox.patterns.system` 过滤；新出现的模板自己加进正则。
 

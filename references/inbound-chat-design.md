@@ -1,5 +1,8 @@
 # HR 主动找我：自动对话设计
 
+> **历史文档**：本文描述的旧回复引擎（`scripts/reply.py`、`reply_eval.py`、`inbox.auto_reply.*`）已于 2026-11-06 cleanup-02 移除；
+> 现行回 HR 只走对话模块（`conversation.py` + `conv_*`，`chat` 子命令）。下文保留作设计背景与教训。
+
 > 状态：分级与配额、回复引擎、会话定位都已上线，`inbox.auto_reply.enabled` 可开（`dry: true` 先预演）。
 > 实施前先读 SKILL.md「A/B 分级与投递顺序」与本文「回复闸门与离线评测」。
 > 主动投递（扫岗 → 筛选 → 按 JD 写招呼语）保持原样，本文只覆盖「对方主动来打招呼」这条线。
@@ -32,7 +35,7 @@
 ## 状态机（`data/chat_state.json`）
 
 ```
-job_id → {brand, title, grade, stage, asked[], turns, last_msg_ts, pending_question, weixin_notified}
+job_id → {brand, title, grade, stage, asked[], turns, last_msg_ts, pending_question, notified}
 stage: asked_content | asked_salary | asked_risk | wait_user | interview | booked | closed
 ```
 
@@ -40,13 +43,13 @@ stage: asked_content | asked_salary | asked_risk | wait_user | interview | booke
 - 单会话自动回复 ≤4 轮；每轮间隔 ≥90s；同一 HR 一天 ≤3 次；对方 24h 未回不催
 - 跨行被否 → `closed_cross_industry`，不再追
 
-## 答不上来 → 转微信挂起
+## 答不上来 → 推送给用户并挂起
 
 触发：问到简历里没有的事实（期望薪资底线、到岗时间、离职原因、学历/证书、背调授权、长期出差）。
 
-1. 微信发一条：公司·岗位 / 对方问什么 / 我的草稿 / 「回我一句我接着发」
+1. 推送一条：公司·岗位 / 对方问什么 / 我的草稿 / 「回我一句我接着发」
 2. `stage = wait_user`，该会话停止自动回复
-3. 用户在微信回一句 → 发出去并恢复 stage
+3. 用户在推送渠道回一句 → 发出去并恢复 stage
 
 ⚠️ 纯 cron `no_agent` 无法等待；这条链只有 Agent 在线时才通，别把它写成无人值守。
 
@@ -54,7 +57,7 @@ stage: asked_content | asked_salary | asked_risk | wait_user | interview | booke
 
 - 判形式：消息含 电话/电话沟通/电话聊 → 电话；视频/线上/腾讯会议/飞书/Zoom → 线上
 - **线上可直接约定**并通知用户；电话/线下先争取改线上
-- 约定后微信汇报：时间、形式与链接、对方称呼、工作内容 3 行内、薪资构成
+- 约定后推送汇报：时间、形式与链接、对方称呼、工作内容 3 行内、薪资构成
 - 用户已把旧规则「时间必须本人确认」放宽为「线上可直接约」，不要再按旧规则拒绝或空等确认
 
 ## 投递配额与排班（与分级配套）
@@ -66,7 +69,7 @@ stage: asked_content | asked_salary | asked_risk | wait_user | interview | booke
 - 每跳配额 = `ceil(剩余额度 / 剩余跳数)`，`max_per_window=8` 封顶，跳过的时间点自动顺延
 - 白天只发 A；读到 B 跳过、记 `b_pool`；末轮（22 点）用 B 补到 `daily_cap`，B 每日 ≤10；C 永不投
 - 比固定 20A+10B 好：A 池够时一个 B 都不投，不会为了凑名额投跨行岗
-- 末轮同时出当天总结（投递数 + 拒绝复盘 + 待确认），发微信
+- 末轮同时出当天总结（投递数 + 拒绝复盘 + 待确认），推送给用户
 
 ## v1 实现（`scripts/reply.py`，已写但默认关闭）
 
@@ -169,7 +172,7 @@ R.generate(cfg, {"encryptJobId": item["job_id"]}, text)  # 只生成，不发送
 ## 其余缺口
 
 - 定时单独一跳（如 `0 13,16,19,22 * * *`），与投递跳、inbox 跳共用 `data/.lock`
-- 分三期：①分级 + 配额（已上线）→ ②回复引擎（v1 已写，等会话定位）→ ③A 类三问 + 状态机 + 转微信
+- 分三期：①分级 + 配额（已上线）→ ②回复引擎（v1 已写，等会话定位）→ ③A 类三问 + 状态机 + 转人工推送
 
 ## 风控
 

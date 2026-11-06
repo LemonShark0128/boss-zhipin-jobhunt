@@ -21,17 +21,12 @@ def commitment(text, historical_amounts=False):
 
 
 
-def safe_interview_reply(text, cfg):
-    markers = ((cfg.get('interview_reply') or {}).get('require_markers')
-               if isinstance(cfg.get('interview_reply'), dict) else None)
-    if markers is None:
-        markers = ['时段', '确认']
-    if not markers or not all(isinstance(m, str) and m and m in text for m in markers):
-        return False
-    # Neutral interview words express the request; other commitment checks stay.
-    neutral = re.sub(r'线上面试|面试|面谈|复试|初试', '', text)
-    return not commitment(neutral) and not bool(re.search(
-        r'准时|接受|同意|承诺|保证|参加|出席|赴约|已确认|已经确认|一定|肯定|按您安排|听您安排|到岗|入职|录用|薪资|月薪|待遇|工资|条件|'
-        r'(我|我们).{0,8}(到|来|去)|'
-        r'明天|后天|今天|下午|上午|晚上|周[一二三四五六日天]|星期|[\d一二两三四五六七八九十]+[点:：]|'
-        r'(我会|我能|可以|一定).{0,12}(到|来|参加)', text))
+# conv-12：我方话术不许自我否定（「但无…专项经验」「缺乏…背景」）。否定词与经验类词之间不跨标点，
+# 「无责底薪」「无底薪」「无论…」不带经验类词，不会命中。
+SELF_NEGATION_RE = re.compile(
+    r'(?:无|没有|没|缺乏|缺少|不具备|欠缺|不太?熟悉?|未曾?|尚未|暂无)'
+    r'[^，。,；;！!？?\n]{0,8}?(?:经验|经历|背景|资源|能力|专项|基础)')
+
+
+def self_negation(text):
+    return bool(isinstance(text, str) and SELF_NEGATION_RE.search(text))

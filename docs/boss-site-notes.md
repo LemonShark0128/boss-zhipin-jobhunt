@@ -57,7 +57,7 @@ https://www.zhipin.com/job_detail/<encryptJobId>.html
 ### 聊天发送实测事实（2026-10-28，任务提供的真机证据）
 
 - `/job_detail/<id>.html`：公司名只能解析 `document.title`，形如
-  `「潮玩渠道经理招聘」_戊示例科技招聘-BOSS直聘`；`.company-name` 是侧栏同类公司，禁止回退。
+  `「虚构渠道经理招聘」_戊示例科技招聘-BOSS直聘`；`.company-name` 是侧栏同类公司，禁止回退。
   岗位名取 `.job-banner h1,.job-name,h1`，岗位 ID 取 URL。
 - 点击 `.btn-startchat`（立即沟通）是**整页跳转**到 `/web/geek/chat`，没有招呼弹窗；
   最多等待 12 秒，每 0.8 秒探测路径。聊天页标题变为 `BOSS直聘`，不可再从标题取公司。
@@ -71,7 +71,7 @@ https://www.zhipin.com/job_detail/<encryptJobId>.html
   继续沟通按钮均不算发送凭据。否则 `pending_verification`，流水记 `unknown` 并通过
   `unresolved_send` 停止后续发送，等待人工核对及 `ledger-ack`。
 
-恢复定时前先走 [人工核对清单](live-check-chat-send.md)；本轮仅离线测试，未重新操作真机。
+恢复定时前先人工在会话页核对一遍；本轮仅离线测试，未重新操作真机。
 
 ## 「招呼语」开关必须关掉
 

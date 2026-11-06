@@ -13,8 +13,8 @@ import hunt_config as HC
 import hunt_state as HS
 import outbound as O
 import greet as G
-import human as H
-import reply as R
+import message_policy as MP
+import send_safety as SS
 
 
 class SafetyTests(unittest.TestCase):
@@ -59,38 +59,22 @@ class SafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'ambiguous.*张HR.*李HR'):
             CD.select_conversation(rows, '公司')
 
-    def test_send_rechecks_identity(self):
-        br = Mock(); br.json.return_value = {'conv_key': 'id:old', 'messages': []}
-        self.assertEqual(B.send_in_chat(br, 1, '可以聊聊，负责哪个区域？', '可以',
-                                       conv_key='id:new', cfg=self.cfg), 'error: unknown_conversation')
-        br.fill.assert_not_called()
-
     def test_unknown_delivery_blocks_retry(self):
         def crashed():
             raise TimeoutError('after click')
         with self.assertRaises(TimeoutError):
-            B.ledger_send(self.cfg, 'auto_reply', 'id:1', '', '可以聊聊吗？', crashed)
+            SS.ledger_send(self.cfg, 'auto_reply', 'id:1', '', '可以聊聊吗？', crashed)
         rows = [json.loads(x) for x in (self.root/'send_ledger.jsonl').read_text().splitlines()]
         self.assertEqual([r['status'] for r in rows], ['pending', 'unknown'])
-        self.assertEqual(B.ledger_count(self.cfg, {'auto_reply'}), 0)
+        self.assertEqual(SS.ledger_count(self.cfg, {'auto_reply'}), 0)
         sender = Mock(return_value='replied')
         with self.assertRaisesRegex(RuntimeError, 'unresolved_send'):
-            B.ledger_send(self.cfg, 'auto_reply', 'id:1', '', '可以聊聊吗？', sender)
+            SS.ledger_send(self.cfg, 'auto_reply', 'id:1', '', '可以聊聊吗？', sender)
         sender.assert_not_called()
 
-    def test_failed_hint_is_not_learned(self):
-        H.record('面试时间？', '明天下午到', '好的', ok=False, cfg=self.cfg)
-        self.assertEqual(H.find_hint('面试时间？', self.cfg), (None, None))
-
-    def test_hint_cannot_bypass_judge(self):
-        H.record('面试时间？', '明天下午到', '好的', cfg=self.cfg)
-        with patch.object(G, '_generate_raw') as model:
-            result = R.generate(self.cfg, {}, '', history=[{'who': 'friend', 'text': '面试时间？'}])
-        self.assertFalse(result['text']); model.assert_not_called()
-
     def test_commitment_is_manual_required(self):
-        ok, reasons = R.check('可以，明天下午我准时到现场面试，您把地址发我好吗？')
-        self.assertFalse(ok); self.assertIn('manual_required', reasons)
+        # 旧 reply.check 的 manual_required 就是 commitment()；对话模块闸门沿用同一函数。
+        self.assertTrue(MP.commitment('可以，明天下午我准时到现场面试，您把地址发我好吗？'))
 
     def test_salary_cannot_support_achievements(self):
         cfg = {'user': {'greeting': {'facts': ['带6人团队，新签80家'], 'length': {'min': 1, 'max': 380}}}}
@@ -132,7 +116,7 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual(list(self.root.glob('state.json.tmp.*')), [])
 
     def test_success_ledger_restores_lost_state_and_quota(self):
-        B.ledger_send(self.cfg, 'send', 'job:j1', 'j1', 'text', lambda: 'sent',
+        SS.ledger_send(self.cfg, 'send', 'job:j1', 'j1', 'text', lambda: 'sent',
                       {'grade': 'A', 'target': '方向', 'brand': '公司', 'boss': 'HR'})
         state = HS.load_state(self.cfg)
         self.assertEqual(state['day_count'], 1)
@@ -142,7 +126,7 @@ class SafetyTests(unittest.TestCase):
 
     def test_reconciliation_counts_once_without_resending(self):
         try:
-            B.ledger_send(self.cfg, 'auto_reply', 'id:1', '', 'text',
+            SS.ledger_send(self.cfg, 'auto_reply', 'id:1', '', 'text',
                           lambda: (_ for _ in ()).throw(TimeoutError()),
                           {'msg_count': 1, 'last_message_id': 'h1', 'click_ts_epoch': 1000000})
         except TimeoutError:
@@ -152,7 +136,7 @@ class SafetyTests(unittest.TestCase):
             {'id': 'm1', 'who': 'mine', 'text': 'text', 'ts': '1001'}]}
         B.ledger_guard(self.cfg, verify=lambda row: confirms_new_bubble(row, conversation))
         B.ledger_guard(self.cfg, verify=lambda row: confirms_new_bubble(row, conversation))
-        self.assertEqual(B.ledger_count(self.cfg, {'auto_reply'}), 1)
+        self.assertEqual(SS.ledger_count(self.cfg, {'auto_reply'}), 1)
 
     def test_fallback_reason_for_salary_number_theft(self):
         self.cfg['user']['greeting'] = {'mode': 'llm', 'facts': ['带6人团队，新签80家'],
@@ -164,77 +148,33 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual(result['source'], 'template_fallback')
         self.assertIn('numbers_not_in_facts', result['fallback_reason'])
 
-    def test_unsafe_hint_draft_does_not_fall_back_to_auto_send(self):
-        with patch.object(H, 'find_hint', return_value=('其他', '同意明天到现场面试')):
-            result = R.generate(self.cfg, {}, '', history=[{'who': 'friend', 'text': '你好方便聊聊吗？'}])
-        self.assertEqual(result['source'], 'manual_required')
-        self.assertFalse(result['text'])
-
     def test_click_error_is_unknown_not_retryable_failure(self):
         with self.assertRaisesRegex(RuntimeError, 'unresolved_send'):
-            B.ledger_send(self.cfg, 'auto_reply', 'id:1', '', 'text', lambda: 'click_err')
+            SS.ledger_send(self.cfg, 'auto_reply', 'id:1', '', 'text', lambda: 'click_err')
         self.assertEqual(B.ledger_latest(self.cfg)[0]['status'], 'unknown')
 
     def test_other_commitments_are_manual(self):
         for text in ['下个月一号入职，具体流程是什么？', '月薪两万可以，具体流程是什么？',
                      '保证拿到offer，具体流程是什么？']:
-            self.assertIn('manual_required', R.check(text)[1], text)
+            self.assertTrue(MP.commitment(text), text)
 
     def test_chat_constants_available(self):
         self.assertEqual(CD.CHAT_URL, 'https://www.zhipin.com/web/geek/chat')
-        self.assertEqual(CD.NEW_GREET_TAB, '新招呼')
 
     def test_sent_followup_replays_and_does_not_send_twice(self):
         sender = Mock(return_value='replied')
-        B.ledger_send(self.cfg, 'followup', 'id:1', 'j1', 'text', sender)
+        SS.ledger_send(self.cfg, 'followup', 'id:1', 'j1', 'text', sender)
         restored = HS.load_state(self.cfg)
         self.assertEqual(restored['followed'], ['j1'])
-        B.ledger_send(self.cfg, 'followup', 'id:1', 'j1', 'text', sender)
-        self.assertEqual(sender.call_count, 1)
-        self.assertEqual(B.ledger_count(self.cfg, {'followup'}), 1)
+        # audit-01 #5：旧 followup 的按岗位去重分支已删（无调用方）；这里只验历史流水回放
+        self.assertEqual(SS.ledger_count(self.cfg, {'followup'}), 1)
 
     def test_sent_interview_replays_and_clears_pending(self):
         HS.save_state(self.cfg, {'pending': {'j1': {}}})
-        B.ledger_send(self.cfg, 'interview_reply', 'id:1', 'j1', 'text', lambda: 'replied')
+        SS.ledger_send(self.cfg, 'interview_reply', 'id:1', 'j1', 'text', lambda: 'replied')
         restored = HS.load_state(self.cfg)
         self.assertEqual(restored['replied'], ['j1'])
         self.assertEqual(restored['pending'], {})
-
-    def test_old_body_or_input_marker_is_not_send_confirmation(self):
-        br = Mock()
-        before = {'conv_key': 'id:1', 'messages': [{'who': 'mine', 'text': '方便，岗位负责哪个区域？'}]}
-        br.json.side_effect = lambda tab,expr,default=None: {'ok':True} if 'dispatchEvent' in expr else before
-        br.fill.return_value = {}; br.click.return_value = {}
-        with patch.object(B.time, 'sleep'), patch.object(CD, 'atomic_chat_click',
-                return_value={'ok':True,'clicked':True,'conv_key':'id:1'}):
-            with self.assertRaisesRegex(RuntimeError, 'unresolved_send'):
-                B.send_in_chat(br, 1, '方便，岗位负责哪个区域？', '方便', 'id:1', self.cfg,
-                               'reply-to', new_turn=True)
-        self.assertEqual(B.ledger_latest(self.cfg)[0]['status'], 'unknown')
-
-    def test_successful_chat_records_confirmed_own_bubble(self):
-        br = Mock()
-        before = {'conv_key': 'id:1', 'messages': [{'id': 'h1', 'who': 'friend', 'text': '方便聊聊吗？'}]}
-        after = {'conv_key': 'id:1', 'messages': before['messages'] + [
-            {'id': 'm1', 'who': 'mine', 'text': '方便，岗位负责哪个区域？'}]}
-        br.json.side_effect = [before, {'ok':True}, after]
-        br.fill.return_value = {}; br.click.return_value = {}
-        with patch.object(B.time, 'sleep'), patch.object(CD, 'atomic_chat_click',
-                return_value={'ok':True,'clicked':True,'conv_key':'id:1'}):
-            self.assertEqual(B.send_in_chat(br, 1, '方便，岗位负责哪个区域？', '方便',
-                                           'id:1', self.cfg), 'replied')
-        self.assertEqual(B.ledger_count(self.cfg, {'auto_reply'}), 1)
-
-    def test_reply_to_ambiguous_target_never_generates(self):
-        config = self.root/'config.json'; config.write_text(json.dumps(self.cfg))
-        args = B.build_parser().parse_args(['--config', str(config), 'reply-to', '公司', '--brief', '方便聊聊'])
-        br = Mock(); br.close_own_tabs.return_value = 1
-        with patch.object(B.CM, 'Browser', return_value=br), patch.object(B.time, 'sleep'), \
-                patch.object(CD, 'goto_tab', return_value=True), patch.object(CD, 'conversation_rows', return_value=[
-                    {'conv_key': 'id:1', 'text': '公司 张HR'}, {'conv_key': 'id:2', 'text': '公司 李HR'}]), \
-                patch.object(R, 'generate') as model:
-            self.assertEqual(args.func(args), 2)
-        model.assert_not_called(); br.fill.assert_not_called()
 
     def test_migration_completes_after_partial_legacy_import(self):
         from send_safety import ledger_append
@@ -245,11 +185,11 @@ class SafetyTests(unittest.TestCase):
                                 'cmd': 'send', 'job_id': 'j1', 'status': 'sent'})
         HS.migrate_ledger(self.cfg, st)
         HS.migrate_ledger(self.cfg, st)
-        self.assertEqual(B.ledger_count(self.cfg, {'send'}), 2)
+        self.assertEqual(SS.ledger_count(self.cfg, {'send'}), 2)
 
     def test_salary_promises_without_salary_word(self):
         for text in ['每月两万可以，负责哪个区域？', '两万我接受，负责哪个区域？']:
-            self.assertIn('manual_required', R.check(text)[1])
+            self.assertTrue(MP.commitment(text), text)
 
     def test_greeting_wrong_loaded_job_never_generates(self):
         job = {'encryptJobId': 'intended', 'jobName': '城市经理', 'brandName': '甲公司'}
@@ -260,11 +200,11 @@ class SafetyTests(unittest.TestCase):
 
     def test_reply_migration_does_not_double_count_conv_key_history(self):
         text = '方便，负责哪个区域？'
-        B.ledger_send(self.cfg, 'auto_reply', 'id:1', '', text, lambda: 'replied')
+        SS.ledger_send(self.cfg, 'auto_reply', 'id:1', '', text, lambda: 'replied')
         HS.save_state(self.cfg, {'auto_replies': {'id:1': {'text': text, 'ts': HC.stamp(self.cfg)}}})
         state = HS.load_state(self.cfg)
         HS.migrate_ledger(self.cfg, state)
-        self.assertEqual(B.ledger_count(self.cfg, {'auto_reply'}), 1)
+        self.assertEqual(SS.ledger_count(self.cfg, {'auto_reply'}), 1)
 
     def test_invalid_nested_state_fields_report_path(self):
         for value in [{'sent': {'j': {'ts': 123}}}, {'day_count': -1}, {'contacts': [{}]}]:
@@ -274,9 +214,9 @@ class SafetyTests(unittest.TestCase):
 
     def test_reply_state_uses_event_id_across_clock_boundary(self):
         text = '方便，负责哪个区域？'
-        B.ledger_send(self.cfg, 'auto_reply', 'id:1', '', text, lambda: 'replied')
+        SS.ledger_send(self.cfg, 'auto_reply', 'id:1', '', text, lambda: 'replied')
         state = HS.load_state(self.cfg)
-        HS.remember_reply(self.cfg, state, 'id:1', 'auto_reply', {'source': 'llm'})
+        HS.refresh_ledger_counts(self.cfg, state)
         with patch.object(HC, 'stamp', return_value='2099-01-01 00:00'):
             HS.save_state(self.cfg, state)
             HS.migrate_ledger(self.cfg, HS.load_state(self.cfg))

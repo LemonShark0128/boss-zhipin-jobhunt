@@ -4,11 +4,9 @@ import tempfile
 from unittest.mock import Mock, patch
 
 from test_phase_a import Base, B
-import chat_dom as CD
 import hunt_config as HC
 import outbound as O
 from test_round8 import JOB, TEXT, Page
-from test_round7 import TEXT as REPLY_TEXT
 import chat_send as CS
 import send_safety as S
 
@@ -16,9 +14,9 @@ import send_safety as S
 class Batch1c(Base):
     def exercise(self, cmd, snapshots, receipt=None, failure=None):
         cfg = dict(self.cfg, grading={'enabled': False})
-        before = {'ok': True, 'conv_key': 'id:1', 'panel_text': '戊示例科技 潮玩渠道经理',
+        before = {'ok': True, 'conv_key': 'id:1', 'panel_text': '戊示例科技 虚构渠道经理',
                   'messages': [{'id': 'h1', 'who': 'friend', 'text': '您好'}]}
-        msg = TEXT if cmd == 'send' else B.INTERVIEW_DEFAULT if cmd == 'interview_reply' else REPLY_TEXT
+        msg = TEXT
         br = Mock()
         br.click.return_value = {}
         br.json.return_value = {'path': '/web/geek/chat'}
@@ -47,9 +45,7 @@ class Batch1c(Base):
                 (B.G, 'generate', {'return_value': {'text': TEXT}}),
                 (CS, 'type_into_chat', {'return_value': {'ok': True}}),
                 (CS, 'chat_snapshot', {'side_effect': snapshot}),
-                (CD, 'active_conversation', {'side_effect': snapshot}),
                 (CS, 'click_send_scoped', {'side_effect': click}),
-                (CD, 'atomic_chat_click', {'side_effect': click}),
             ):
                 stack.enter_context(patch.object(owner, name, **kwargs))
             slept = stack.enter_context(patch.object(B.time, 'sleep'))
@@ -57,23 +53,21 @@ class Batch1c(Base):
             if failure:
                 stack.enter_context(patch.object(CS, 'confirm_new_bubble', side_effect=failure))
             def run():
-                if cmd == 'send':
-                    return O.send_one(br, 1, dict(JOB), cfg)
-                return B.send_in_chat(br, 1, msg, '', 'id:1', cfg, cmd=cmd, job_id='j')
+                return O.send_one(br, 1, dict(JOB), cfg)
             if snapshots[-1] is True and not failure:
-                self.assertEqual(run(), 'sent' if cmd == 'send' else 'replied')
+                self.assertEqual(run(), 'sent')
             else:
                 with self.assertRaisesRegex(RuntimeError, 'unresolved_send'):
                     run()
                 first_reads = list(reads)
                 with self.assertRaisesRegex(RuntimeError, 'unresolved_send'):
                     run()
-            self.assertEqual((CS.click_send_scoped if cmd == 'send' else CD.atomic_chat_click).call_count, 1)
+            self.assertEqual(CS.click_send_scoped.call_count, 1)
             self.assertEqual(CS.type_into_chat.call_count, 1)
             return reads if snapshots[-1] is True and not failure else first_reads, slept.call_args_list, traced.call_args_list, S.ledger_latest(cfg)[0]
 
     def test_pending_reads_third_snapshot_without_resending(self):
-        for cmd in ('send', 'auto_reply', 'interview_reply', 'followup', 'reply-to'):
+        for cmd in ('send',):
             with self.subTest(cmd=cmd), tempfile.TemporaryDirectory() as root:
                 self.cfg['paths'].update(workdir=root, state=root + '/state.json')
                 reads, sleeps, traces, row = self.exercise(cmd, [False, False, True])
@@ -83,7 +77,7 @@ class Batch1c(Base):
                 self.assertEqual(sum('after snapshot' in c.args[0] for c in traces), 1)
 
     def test_three_unconfirmed_reads_keep_ledger_guard(self):
-        for cmd in ('send', 'auto_reply'):
+        for cmd in ('send',):
             with self.subTest(cmd=cmd), tempfile.TemporaryDirectory() as root:
                 self.cfg['paths'].update(workdir=root, state=root + '/state.json')
                 reads, _, _, row = self.exercise(cmd, [False] * 3)
@@ -91,7 +85,7 @@ class Batch1c(Base):
                 self.assertEqual(row['status'], 'unknown')
 
     def test_confirmation_errors_are_traced_and_remain_unknown(self):
-        for cmd in ('send', 'auto_reply'):
+        for cmd in ('send',):
             for stage in ('snapshot', 'confirm'):
                 with self.subTest(cmd=cmd, stage=stage), tempfile.TemporaryDirectory() as root:
                     self.cfg['paths'].update(workdir=root, state=root + '/state.json')
@@ -102,7 +96,7 @@ class Batch1c(Base):
                     self.assertEqual(row['status'], 'unknown')
 
     def test_ledger_records_confirmed_receipt_path(self):
-        for cmd in ('send', 'auto_reply'):
+        for cmd in ('send',):
             for via in ('trusted_click', 'enter', 'js_fallback'):
                 with self.subTest(cmd=cmd, via=via), tempfile.TemporaryDirectory() as root:
                     self.cfg['paths'].update(workdir=root, state=root + '/state.json')

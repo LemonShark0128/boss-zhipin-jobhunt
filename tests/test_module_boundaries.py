@@ -9,7 +9,8 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 
-SYMBOLS = {'hunt_config': ['DEFAULT_DIR',
+SYMBOLS = {'jd_page': ['JD_EXPR', 'read_jd'],
+ 'hunt_config': ['DEFAULT_DIR',
                  'TZ_DEFAULT',
                  'TICK_WAKE_WAIT_SECONDS',
                  'config_path',
@@ -46,7 +47,6 @@ SYMBOLS = {'hunt_config': ['DEFAULT_DIR',
                    'remaining_windows',
                    'window_minutes',
                    'quotas_for_now',
-                   'quota_for_now',
                    'shrink_quotas',
                    'check_deadline',
                    'tick_deadline',
@@ -60,15 +60,13 @@ SYMBOLS = {'hunt_config': ['DEFAULT_DIR',
                 'record_outcome',
                 'refresh_ledger_counts',
                 'migrate_ledger',
-                'remember_reply',
                 'atomic_json',
                 'contact_last_sent',
                 'same_hr_filter',
                 'candidates',
                 'cached_jd',
                 'cached_grade'],
- 'outbound': ['CAPTCHA_RE',
-              'APPWALL_RE',
+ 'outbound': ['APPWALL_RE',
               'render',
               'verify_marker',
               'login_state',
@@ -77,13 +75,11 @@ SYMBOLS = {'hunt_config': ['DEFAULT_DIR',
               'greeting_switch',
               'page_guard',
               'scan',
-              'JD_EXPR',
               'LAST_GREET',
               'read_jd',
               'inspect_job',
               'prepare_grade',
               'job_identity_matches',
-              'atomic_job_click',
               'send_one',
               'do_send',
               'cleanup_browser']}
@@ -125,9 +121,22 @@ class ModuleBoundaryTests(unittest.TestCase):
         path = SCRIPTS / 'outbound.py'
         self.assertTrue(path.exists())
         tree = ast.parse(path.read_text())
-        forbidden = {'reply', 'human', 'conv_state', 'conv_parse'}
+        forbidden = {'reply', 'human', 'conv_state', 'conv_parse',
+                     'conversation', 'conv_actions', 'conv_rules', 'conv_llm', 'conv_store'}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 self.assertTrue(forbidden.isdisjoint(alias.name for alias in node.names))
             elif isinstance(node, ast.ImportFrom):
                 self.assertNotIn(node.module, forbidden)
+
+    def test_conversation_does_not_import_outbound(self):
+        # audit-01 Q8：对话模块不反向依赖投递模块；读 JD 走 jd_page，收尾走 chrome_mcp.cleanup_browser
+        tree = ast.parse((SCRIPTS / 'conversation.py').read_text())
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                imported.add(node.module)
+        self.assertNotIn('outbound', imported)
+        self.assertIn('jd_page', imported)

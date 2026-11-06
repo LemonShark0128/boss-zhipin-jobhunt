@@ -47,7 +47,8 @@ def answer(cfg, hr_text, history, facts):
 def _safe_opener(text, cfg, job):
     return (isinstance(text, str) and 0 < len(text) <= 60 and
             not re.search(r'[?？\n]|吗|么|您好|你好|感谢|贵司', text) and
-            G.basic_safety(text, cfg, job)[0] and not message_policy.commitment(text))
+            G.basic_safety(text, cfg, job)[0] and not message_policy.commitment(text)
+            and not message_policy.self_negation(text))
 
 
 def opener(cfg, job, jd):

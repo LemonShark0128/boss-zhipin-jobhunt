@@ -36,7 +36,8 @@ class OutOfViewTests(unittest.TestCase):
             items=items, row_snapshots=[rows, rows, rows], dry=True)
         self.assertEqual(result['processed'], 2)
         self.assertEqual([c.kwargs['conv_key'] for c in opened.call_args_list],
-                         ['id:fiction3', 'id:fiction4'])
+                         # conv-11：最旧优先，先处理 age=4 的会话。
+                         ['id:fiction4', 'id:fiction3'])
         self.assertEqual(result.get('out_of_view'), 2)
         self.assertEqual(result['row_missing'], 0)
 
@@ -76,17 +77,23 @@ class OutOfViewTests(unittest.TestCase):
         record = self.record(status='manual')
         conv_store.save(self.path, {record['conv_key']: record})
         self.assertEqual(self.notices(self.outside_hop([self.item()])), [])
-        self.assertEqual(conv_store.load(self.path)[record['conv_key']], record)
+        saved = conv_store.load(self.path)[record['conv_key']]
+        # conv-13：首次迁移按规格给近 72h 的需人工补登置顶（开关关时也补登、不推送、不置顶）
+        pin = saved.pop('pin')
+        self.assertEqual((pin['reason'], pin['pinned_ts'], pin['done_ts']), ('manual', None, None))
+        self.assertEqual(saved, record)
 
     def test_at_most_three_newest_notices_and_deferred_items_retry(self):
         items = [self.item(n, age=n) for n in (5, 2, 4, 1, 3)]
         first = self.outside_hop(items)
         self.assertEqual(first.get('out_of_view'), 5)
         self.assertEqual(len(self.notices(first)), 3)
-        for notice, n in zip(self.notices(first), (1, 2, 3)):
+        # conv-11：按需揭示从最旧开始，失败通知也按最旧优先。
+        for notice, n in zip(self.notices(first), (5, 4, 3)):
             self.assertIn('虚构公司%d｜虚构HR%d' % (n, n), notice)
         self.assertEqual(set(conv_store.load(self.path)),
-                         {'id:fiction1', 'id:fiction2', 'id:fiction3'})
+                         # conv-11：仅最先通知的三个旧会话落盘。
+                         {'id:fiction5', 'id:fiction4', 'id:fiction3'})
         self.assertEqual(len(self.notices(self.outside_hop(items))), 2)
 
     def test_overview_preserves_zero_wording_and_adds_nonzero_count(self):
@@ -97,14 +104,19 @@ class OutOfViewTests(unittest.TestCase):
         self.assertEqual(zero.get('out_of_view'), 0)
         self.assertEqual(zero['overview'], expected)
         outside = self.outside_hop([self.item()])
-        self.assertEqual(outside['overview'], expected.replace(
+        # conv-11：40 行外也计入候选总数。
+        self.assertEqual(outside['overview'], expected.replace('候选 0', '候选 1').replace(
             'row_missing 0', 'row_missing 0｜40行外 1'))
 
     def test_row_disappearing_on_refresh_still_counts_missing(self):
         result, opened, calls, _, _ = self.run_hop(
             row_snapshots=[[{'conv_key': 'id:fiction1'}], []])
-        self.assertEqual(result['row_missing'], 1)
+        # conv-11：当前 DOM 缺行先揭示，失败计 reveal_failed 并走通知规则。
+        self.assertEqual(result['row_missing'], 0)
+        self.assertEqual(result['reveal_failed'], 1)
         self.assertEqual(result.get('out_of_view'), 0)
         opened.assert_not_called()
         self.assertFalse(calls)
-        self.assertFalse(self.path.exists())
+        # conv-11：揭示失败的 HR 消息通知落盘，供跨跳去重。
+        self.assertTrue(self.path.exists())
+        self.assertEqual(len(self.notices(result)), 1)

@@ -42,6 +42,15 @@ def state_lock(path, reentrant=False):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+DEFAULT_MIN_GAP_SECONDS = 60  # audit-01 Q4：投递/账本闸门/对话模块统一的缺省发送间隔
+
+
+def min_gap_seconds(cfg):
+    """sending.min_gap_seconds；未写时统一 60 秒（显式写 0 仍按 0）。"""
+    value = (cfg.get('sending') or {}).get('min_gap_seconds')
+    return DEFAULT_MIN_GAP_SECONDS if value is None else float(value)
+
+
 def ledger_path(cfg):
     return os.path.join(cfg['paths']['workdir'], 'send_ledger.jsonl')
 
@@ -151,17 +160,49 @@ def confirms_new_bubble(row, conversation):
     return False
 
 
-def ledger_guard(cfg, verify=None):
+CONV_CMDS = frozenset({'conv_text', 'conv_resume'})
+GUARD_SCOPES = frozenset({'all', 'outbound', 'conv'})
+
+
+def _conv_row(row):
+    """带会话键的对话模块发送：safety-01 起只锁它自己的会话。"""
+    return row.get('cmd') in CONV_CMDS and bool(row.get('conv_key'))
+
+
+def _in_scope(row, scope, conv_key):
+    if scope == 'all' or not _conv_row(row):
+        return True
+    if scope == 'outbound':
+        return False
+    return bool(conv_key) and row.get('conv_key') == conv_key
+
+
+def conv_pending(cfg):
+    """对话模块未核实的发送：{conv_key: [event_id, ...]}。"""
+    pending = {}
+    for row in ledger_latest(cfg):
+        if row['status'] in {'pending', 'unknown'} and _conv_row(row):
+            pending.setdefault(row['conv_key'], []).append(row['event_id'])
+    return pending
+
+
+def ledger_guard(cfg, verify=None, scope='all', conv_key=None):
     """Only positive, conversation-bound evidence may close an unknown send.
 
     Without such evidence stop before any browser/model action. Never retry an
     unresolved event. An offline operator can inspect the reported event IDs.
+    safety-01：scope='outbound' 不看对话模块的未核实行；scope='conv' 只看本会话的对话行。
+    非对话行、缺会话键的对话行、损坏尾巴在任何 scope 都挡。
     """
+    if scope not in GUARD_SCOPES:
+        raise ValueError('ledger_guard_scope: ' + str(scope))
     if ledger_scan(cfg)[2]:
         raise RuntimeError('skip_ledger_corrupt: pending_verification；请先运行 ledger-repair --dry-run，再用 --apply 隔离')
     unresolved = []
     for row in ledger_latest(cfg):
         if row['status'] in {'pending', 'unknown'}:
+            if not _in_scope(row, scope, conv_key):
+                continue
             has_baseline = all(k in row for k in ('msg_count', 'last_message_id', 'click_ts_epoch'))
             if has_baseline and verify is not None and verify(row) is True:
                 ledger_append(cfg, dict(row, status='sent'))
@@ -175,20 +216,6 @@ def ledger_count(cfg, commands=None):
     today = stamp(cfg, '%Y-%m-%d')
     return sum(r['status'] == 'sent' and r['ts'].startswith(today)
                and (commands is None or r['cmd'] in commands) for r in ledger_latest(cfg))
-
-
-def reply_operation(conv_key, messages, op_id=None):
-    inbound = [m for m in messages if m.get('who') == 'friend']
-    last = inbound[-1] if inbound else {}
-    trigger = last.get('id') or hashlib.sha256(json.dumps(
-        [conv_key, last.get('text') or '', len(inbound)], ensure_ascii=False).encode()).hexdigest()
-    operation = op_id or hashlib.sha256((conv_key + ':' + trigger).encode()).hexdigest()
-    return trigger, operation
-
-
-def terminal_operation(cfg, op_id):
-    return next((r for r in ledger_latest(cfg) if r.get('op_id') == op_id
-                 and r['status'] in {'sent', 'failed', 'voided'}), None)
 
 
 def ledger_ack(cfg, event_id, sent=False, not_sent=False, conv_key=None, text_sha256=None, note=''):
@@ -217,24 +244,19 @@ def ledger_send(cfg, cmd, conv_key, job_id, text, send, metadata=None):
 
 
 def _ledger_send(cfg, cmd, conv_key, job_id, text, send, metadata=None):
-    ledger_guard(cfg)
-    if (metadata or {}).get('op_id') and terminal_operation(cfg, metadata['op_id']):
-        return 'duplicate_op'
+    if cmd in CONV_CMDS:
+        ledger_guard(cfg, scope='conv', conv_key=conv_key)
+    elif cmd == 'send':
+        ledger_guard(cfg, scope='outbound')
+    else:
+        ledger_guard(cfg)
     # Terminal events are authoritative even if the state save never happened.
     for previous in ledger_latest(cfg):
         if previous['status'] != 'sent' or previous['cmd'] != cmd:
             continue
-        if cmd in {'send', 'interview_reply', 'followup'} and job_id and previous.get('job_id') == job_id:
-            return 'sent' if cmd == 'send' else 'replied'
-        trigger = (metadata or {}).get('trigger')
-        if (not (metadata or {}).get('op_id') and trigger
-                and previous.get('conv_key') == conv_key and previous.get('trigger') == trigger):
-            return 'replied'
-    if cmd in {'auto_reply', 'interview_reply', 'followup'}:
-        cap = int(((cfg.get('inbox') or {}).get('auto_reply') or {}).get('daily_cap', 3))
-        if ledger_count(cfg, {'auto_reply', 'interview_reply', 'followup'}) >= max(0, cap):
-            return 'skip_daily_cap'
-    gap = float((cfg.get('sending') or {}).get('min_gap_seconds', 0))
+        if cmd == 'send' and job_id and previous.get('job_id') == job_id:
+            return 'sent'
+    gap = min_gap_seconds(cfg)
     latest = max((r['ts_epoch'] / 1000 for r in ledger_latest(cfg)
                   if r['status'] == 'sent' and r.get('ts_epoch') is not None), default=None)
     if latest is not None:

@@ -23,10 +23,17 @@ import re
 import sys
 import time
 
-SK = os.path.expanduser("~/.hermes/skills/productivity/boss-zhipin-jobhunt/scripts")
+SK = os.path.dirname(os.path.abspath(__file__))  # audit-01 #12：用本仓库的 scripts/，不写死安装目录
 if SK not in sys.path:
     sys.path.insert(0, SK)
 import chrome_mcp as CM  # noqa: E402
+import hunt_config as HC  # noqa: E402
+
+
+def fmt_ms(ms, cfg):
+    """毫秒时间戳按配置时区格式化（audit-01 #12：原先用本机时区，本机是 PST 时差 16 小时）。"""
+    from datetime import datetime
+    return datetime.fromtimestamp(ms / 1000, HC.cfg_tz(cfg)).strftime("%Y-%m-%d %H:%M")
 
 
 def main():
@@ -73,7 +80,7 @@ def main():
                 "brand": it.get("brandName"),
                 "boss": it.get("name"),
                 "title_hr": it.get("title"),
-                "msg_time": time.strftime("%Y-%m-%d %H:%M", time.localtime(ts / 1000)) if ts else None,
+                "msg_time": fmt_ms(ts, cfg) if ts else None,
                 "ts": ts,
                 "text": re.sub(r"\s+", " ", info.get("showText") or "").strip(),
             })

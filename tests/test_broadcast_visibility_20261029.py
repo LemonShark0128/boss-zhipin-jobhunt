@@ -61,11 +61,14 @@ class BroadcastTests(unittest.TestCase):
         return B.run_tick(self.cfg, self.st, now or self.now, self.out)
 
     def test_T1_today_sent_seven(self):
-        text = '\n'.join(F.render({'window': '20:00', 'today_sent': {'count': 7, 'items': [
-            {'brand': '品牌%d' % n, 'grade': 'A'} for n in range(7)]}}))
-        self.assertIn('📋 今日已发 7：品牌0(A)', text)
-        self.assertIn('品牌4(A)＋2', text)
-        self.assertNotIn('品牌5', text)
+        items = [{'brand': '品牌%d' % n, 'name': '职位%d' % n} for n in range(9)]
+        text = '\n'.join(F.render({'window': '20:00', 'today_sent': {'count': 9, 'items': items}}))
+        self.assertIn('📋 今日已发 9', text)
+        self.assertIn('· 品牌0 ｜ 职位0', text)
+        self.assertIn('· 品牌7 ｜ 职位7', text)
+        self.assertIn('另有 1 个未列出', text)
+        self.assertNotIn('品牌8', text)
+        self.assertNotIn('(A)', text)
         self.assertEqual(F.render({'today_sent': {'count': 0, 'items': []}}), [])
         # 窗口外的补跑保持静默：没有 window 时即便今日已发也不出这一行
         self.assertEqual(F.render({'today_sent': {'count': 7, 'items': [
@@ -173,7 +176,8 @@ class BroadcastTests(unittest.TestCase):
         result = self.tick(self.now.replace(hour=23))
         self.assertEqual(result['today_sent']['count'], 10)
         self.assertEqual(len(result['today_sent']['items']), 8)
-        self.assertEqual(result['today_sent']['items'][0], {'brand': '品牌9', 'grade': 'A'})
+        self.assertEqual(result['today_sent']['items'][0]['brand'], '品牌9')
+        self.assertEqual(result['today_sent']['items'][0]['grade'], 'A')
         self.assertEqual(Path(self.cfg['paths']['state']).read_bytes(), before)
         def send(*args, **kwargs):
             self.st['sent']['new'] = {'brand': '新品牌', 'grade': 'B', 'ts': '2026-10-29 20:00:00'}

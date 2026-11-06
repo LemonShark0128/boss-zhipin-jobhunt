@@ -135,7 +135,8 @@ class RowsReadyRunTests(unittest.TestCase):
              patch.object(c.chat_dom, 'reset_list_scroll'):
             result, _, _, _, _ = self.run_hop(items=[item], row_snapshots=[[]] + [self.rows(item)] * 10)
         self.assertFalse(result.get('rows_not_ready'))
-        self.assertEqual(result['reveal_failed'], 1)   # 没重读：仍按首次空行走揭示
+        # conv-11：处理时重读当前 DOM，行已出现，无需揭示。
+        self.assertEqual(result['reveal_failed'], 0)
 
     def test_reveal_empty_reread_waits_then_succeeds(self):
         c = self.module()
@@ -145,7 +146,8 @@ class RowsReadyRunTests(unittest.TestCase):
              patch.object(c.chat_dom, 'reveal_conversation', return_value={'ok': True, 'index': 70}), \
              patch.object(c.chat_dom, 'reset_list_scroll'):
             result, opened, _, _, _ = self.run_hop(items=[newest, far], row_snapshots=snaps)
-        self.assertEqual(wait.call_args.kwargs.get('attempts'), 2)
+        # conv-11：空快照由处理前读行消费，揭示后行已就绪，不再等待。
+        wait.assert_not_called()
         self.assertEqual(result['revealed'], 1)
         self.assertEqual(result['reveal_failed'], 0)
         self.assertEqual(result['processed'], 2)
@@ -176,7 +178,8 @@ class RowsReadyRunTests(unittest.TestCase):
              patch.object(c.chat_dom, 'reset_list_scroll'):
             snaps = [self.rows(newest), dup, self.rows(newest)] + [self.rows(newest)] * 10
             result, _, _, _, _ = self.run_hop(items=[newest, a, b], row_snapshots=snaps)
-        self.assertEqual(result['reveal_reasons'], {'rows_duplicate': 1, 'rows_missing': 1})
+        # conv-11：最旧优先且揭示前重读；重复行快照在揭示前消费，两次揭示均缺目标行。
+        self.assertEqual(result['reveal_reasons'], {'rows_missing': 2})
 
 
 if __name__ == '__main__':

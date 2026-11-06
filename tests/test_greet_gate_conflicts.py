@@ -11,13 +11,13 @@ class GreetGateConflictsTests(unittest.TestCase):
     def setUp(self):
         self.cfg = {'user': {'greeting': {'facts': [
             '在甲平台做城市经理，新签商户 200+ 家',
-            '在乙外卖带团队，业绩 +30%',
+            '在乙零售带团队，业绩 +30%',
         ]}}}
 
     def greeting(self, name, extra=''):
         return ('您好，看到你们在招' + name + '。'
                 '我在甲平台做城市经理，新签商户 200+ 家。'
-                '我在乙外卖带团队，业绩 +30%。你们这个岗位看重商户开拓。' + extra + G.CLOSINGS[1])
+                '我在乙零售带团队，业绩 +30%。你们这个岗位看重商户开拓。' + extra + G.CLOSINGS[1])
 
     def assert_no_reason(self, reasons, *prefixes):
         self.assertFalse([r for r in reasons if r.startswith(prefixes)], reasons)
@@ -30,7 +30,7 @@ class GreetGateConflictsTests(unittest.TestCase):
             ('示例城餐饮区域经理15~25k', '示例城餐饮区域经理'),
             ('区域零售高级经理（示例大区）(J13893)', '区域零售高级经理'),
             ('高奢渠道拓展经理-甲品牌 （A227996）', '高奢渠道拓展经理-甲品牌'),
-            ('月3w+甲平台/乙平台专项/丙本地生活储备BDM', '甲平台/乙平台专项/丙本地生活储备BDM'),
+            ('月3w+甲平台/乙平台专项/丙示例储备BDM', '甲平台/乙平台专项/丙示例储备BDM'),
             ('城市经理15-25K', '城市经理'),
             ('城市经理 年薪30-50万', '城市经理'),
             ('城市经理－编号123', '城市经理'),
@@ -85,7 +85,7 @@ class GreetGateConflictsTests(unittest.TestCase):
         self.assertIn('manual_required', G.basic_safety(text + '可以接受全国出差。', self.cfg, job)[1])
 
     def test_unbound_summary_stays_rejected_with_actionable_feedback(self):
-        clause = '我在甲平台和乙外卖都跑过这套'
+        clause = '我在甲平台和乙零售都跑过这套'
         reasons = G.check(self.greeting('城市经理', clause + '。'), self.cfg,
                           {'jobName': '城市经理'})[1]
         self.assertIn('fact_not_bound:' + clause, reasons)
@@ -133,7 +133,7 @@ class GreetGateConflictsTests(unittest.TestCase):
         job = {'jobName': '城市经理', 'brandName': '丁示例平台'}
         for text in (
             '在甲平台做城市经理，新签商户 200+ 家',
-            '在乙外卖带团队，业绩 +30%',
+            '在乙零售带团队，业绩 +30%',
             '看到你们在招城市经理，这行我做了7年',
             '看到你们在招丁示例平台城市经理，你们这个岗位看重区域拓展',
         ):
@@ -145,14 +145,14 @@ class GreetGateConflictsTests(unittest.TestCase):
         self.assertTrue(G.basic_safety('我在甲平台做城市经理', self.cfg, known_job)[0])
 
     def test_recruiter_brand_anywhere_in_my_experience_is_rejected(self):
-        job = {'jobName': '城市经理', 'brandName': '美团'}
+        job = {'jobName': '城市经理', 'brandName': '丁示例'}
         for text in (
-            '美团那边我也带过团队',
-            '我之前也在美团干过',
-            '美团的活我都做过',
-            '美团那边我也当过经理',
-            '美团那边我也待过',
-            '美 团那边我也带过团队',
+            '丁示例那边我也带过团队',
+            '我之前也在丁示例干过',
+            '丁示例的活我都做过',
+            '丁示例那边我也当过经理',
+            '丁示例那边我也待过',
+            '丁 示例那边我也带过团队',
         ):
             for gate in (G.fact_binding, G.basic_safety):
                 with self.subTest(text=text, gate=gate.__name__):
@@ -161,12 +161,12 @@ class GreetGateConflictsTests(unittest.TestCase):
                     self.assertIn('org_not_in_facts:' + text.replace(' ', ''), reasons)
 
     def test_recruiter_brand_without_my_experience_remains_safe(self):
-        job = {'jobName': '城市经理', 'brandName': '美 团'}
+        job = {'jobName': '城市经理', 'brandName': '丁 示例'}
         for text in (
             '看到你们在招城市经理，这行我做了7年',
-            '你们美团这个岗位看重区域拓展',
-            '我关注美团这个岗位',
-            '美团在招城市经理，我在乙外卖带团队',
+            '你们丁示例这个岗位看重区域拓展',
+            '我关注丁示例这个岗位',
+            '丁示例在招城市经理，我在乙零售带团队',
         ):
             for gate in (G.fact_binding, G.basic_safety):
                 with self.subTest(text=text, gate=gate.__name__):
@@ -174,11 +174,11 @@ class GreetGateConflictsTests(unittest.TestCase):
                     self.assertTrue(ok, reasons)
 
     def test_recruiter_brand_in_fictional_facts_remains_safe(self):
-        cfg = {'user': {'greeting': {'facts': ['在美 团做BD']}}}
-        job = {'jobName': '城市经理', 'brandName': '美 团'}
+        cfg = {'user': {'greeting': {'facts': ['在丁 示例做BD']}}}
+        job = {'jobName': '城市经理', 'brandName': '丁 示例'}
         for gate in (G.fact_binding, G.basic_safety):
             with self.subTest(gate=gate.__name__):
-                ok, reasons = gate('我在美团做BD', cfg, job)
+                ok, reasons = gate('我在丁示例做BD', cfg, job)
                 self.assertTrue(ok, reasons)
 
     def test_numeric_ranges_keep_both_endpoints_for_provenance(self):
@@ -204,9 +204,9 @@ class GreetTermBindingTests(unittest.TestCase):
 
     def setUp(self):
         self.cfg = {'user': {'greeting': {'facts': [
-            '现任甲出行 BDM（本地生活示例类目）：承接区域 GMV 与新签指标，'
+            '现任甲出行 BDM（示例类目）：承接区域 GMV 与新签指标，'
             '任内累计新签商户 90+ 家，核心 KA 覆盖率 60%',
-            '乙外卖城市经理（丙城/丁城）：一年内新增合作商家 70+ 家，'
+            '乙零售城市经理（丙城/丁城）：一年内新增合作商家 70+ 家，'
             '团队业绩 +12%',
             '核心能力：KA 商务谈判、商户分层运营与渠道拓展',
         ]}}}
@@ -214,11 +214,11 @@ class GreetTermBindingTests(unittest.TestCase):
 
     def test_known_places_and_terms_pass_both_gates(self):
         for text in (
-            '在乙外卖丙城做城市经理',
+            '在乙零售丙城做城市经理',
             '我在甲出行跑过KA商务谈判',
             '我在甲出行做过KA商务谈判和商户分层运营',
             '我在丙城做过城市经理',
-            '我在乙外卖的丙城那边做过城市经理',
+            '我在乙零售的丙城那边做过城市经理',
             '我在甲出行接过ka 商务谈判',
             '我在甲出行主导过KA商务谈判与商户分层运营',
         ):
@@ -233,7 +233,7 @@ class GreetTermBindingTests(unittest.TestCase):
             ('我在甲出行戊城做过KA商务谈判', 'org_not_in_facts:'),
             ('我在戊超市跑过KA商务谈判', 'org_not_in_facts:'),
             ('我在甲出行做过KA商务谈判和直播带货', 'fact_not_bound:'),
-            ('我在甲出行和乙外卖都跑过这套', 'fact_not_bound:'),
+            ('我在甲出行和乙零售都跑过这套', 'fact_not_bound:'),
             ('我在甲出行主导过己平台的KA商务谈判', 'org_not_in_facts:'),
         ):
             for gate in (G.fact_binding, G.basic_safety):

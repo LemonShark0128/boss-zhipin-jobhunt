@@ -60,7 +60,7 @@
   也不能证明 HR 已读。旧的列表时间戳判据不再用于自动确认发送。
 - `/web/geek/chat` 身份证据只能读当前唯一可见 `.chat-conversation`；列表 `.chat-content`
   可以同时含多家公司，不能用它拼出“匹配身份”。无法独立确认当前面板时停止发送。
-- 人工核对按 `docs/live-check-chat-send.md` 操作；没有新增气泡证据时保留未知流水，
+- 人工核对只读会话页确认有没有新增气泡；没有新增气泡证据时保留未知流水，
   不自动重发、不手改真实 state。
 
 ## 10. 招呼语开关（自动招呼）的真实结构：只有 hidden input 说了算
@@ -93,11 +93,11 @@
 
 ## 11. 详情页公司名：`.company-name` 是侧栏「同类公司」，只能从 document.title 取
 
-- 真机（2026-10-28 任务提供证据，`/job_detail/<id>.html`）上 `.company-name` 读到的是**侧栏同类公司**：实测「潮玩渠道经理」页读到
+- 真机（2026-10-28 任务提供证据，`/job_detail/<id>.html`）上 `.company-name` 读到的是**侧栏同类公司**：实测「虚构渠道经理」页读到
   「己示例科技」，而岗位归属「戊示例科技」；`.company-info a`、`.sider-company .company-info a` 都是空串。
 - 后果：身份校验永远 `False` → 每个岗位都返回 `error: unknown_conversation`，「本轮发出 0」，
   而单测全绿（替身把 `.company-name` 想当然了）。离线替身必须覆盖侧栏公司与真实公司不同的情形；上线仍需真机核对。
-- 正确来源是 `document.title`，形如 `「潮玩渠道经理招聘」_戊示例科技招聘-BOSS直聘`：
+- 正确来源是 `document.title`，形如 `「虚构渠道经理招聘」_戊示例科技招聘-BOSS直聘`：
   取 `_` 之后、`招聘` 之前那一段 —— `((document.title||'').split('_')[1]||'').match(/^(.+?)招聘/)`。
   岗位名仍取 `.job-banner h1,.job-name,h1`，job_id 仍取路径 `/job_detail/([^/]+)\.html`。
 - 取不到品牌必须返回 `identity_unknown` 并停在点击前，**不要回落到 `.company-name`**——回落等于允许拿

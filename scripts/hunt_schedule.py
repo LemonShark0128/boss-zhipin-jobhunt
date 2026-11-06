@@ -135,6 +135,13 @@ def validate_cfg(cfg):
             tokens = re.split(r"[\s,，、/;；]+", kw)
             if not any(HF.any_match(roles, token) for token in tokens):
                 warns.append("关键词「%s」与 roles 无交集，扫回来的大概率判 C" % kw)
+    errs.extend(conversation_errors(cfg))
+    return errs, warns
+
+
+def conversation_errors(cfg):
+    """对话跳只需要的配置校验（conversation 段 + 各处正则）；validate 与 chat 入口共用（audit-01 Q5）。"""
+    errs = []
     if 'conversation' in cfg:
         conversation = cfg['conversation']
         if not isinstance(conversation, dict):
@@ -169,7 +176,42 @@ def validate_cfg(cfg):
                 errs.append('conversation.templates 必须是字符串字典')
             if 'opener_fallback' in conversation and not isinstance(conversation['opener_fallback'], str):
                 errs.append('conversation.opener_fallback 必须是字符串')
-    return errs, warns
+    errs.extend(_regex_errors(cfg))
+    return errs
+
+
+def _regex_errors(cfg):
+    """audit-01 Q5：配置里的正则要能编译，否则跑到一半才炸或静默匹配不到。"""
+    errs = []
+
+    def check(name, pattern):
+        if not isinstance(pattern, str):
+            errs.append('%s 必须是字符串' % name)
+            return
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            errs.append('%s 不是可编译正则：%s' % (name, exc))
+
+    for section in ('inbox', 'conversation'):
+        block = cfg.get(section)
+        if not isinstance(block, dict) or 'patterns' not in block:
+            continue
+        patterns = block['patterns']
+        if not isinstance(patterns, dict):
+            errs.append('%s.patterns 必须是「名称 → 正则」字典' % section)
+            continue
+        for key, pattern in patterns.items():
+            check('%s.patterns.%s' % (section, key), pattern)
+    conversation = cfg.get('conversation')
+    if isinstance(conversation, dict) and 'system_patterns' in conversation:
+        pats = conversation['system_patterns']
+        if not isinstance(pats, list):
+            errs.append('conversation.system_patterns 必须是正则列表')
+        else:
+            for i, pattern in enumerate(pats):
+                check('conversation.system_patterns[%d]' % i, pattern)
+    return errs
 
 
 def grade_limits(cfg):
@@ -207,12 +249,6 @@ def quotas_for_now(cfg, st, now):
         remain = max(0, cap - int((st.get("day_by_grade") or {}).get(key, 0)))
         result[key] = min(max_win, math.ceil(remain / n_win)) if carry else min(remain, fixed)
     return result
-
-
-def quota_for_now(cfg, st, now):
-    """返回本跳 (A, B)；未成功发送的额度自然留到后续窗口。"""
-    quotas = quotas_for_now(cfg, st, now)
-    return quotas.get("A", 0), quotas.get("B", 0)
 
 
 def shrink_quotas(quotas, budget):
@@ -307,5 +343,7 @@ def tick_today_sent(st):
             if day and (row.get("applied_ts") or row.get("ts") or "").startswith(day)]
     rows.sort(key=lambda row: row.get("applied_ts") or row.get("ts") or "", reverse=True)
     return {"count": len(rows), "items": [
-        {"brand": str(row.get("brand") or ""), "grade": str(row.get("grade") or "")}
+        {"brand": str(row.get("brand") or ""), "name": str(row.get("name") or ""),
+         "salary": str(row.get("salary") or ""), "city": str(row.get("city") or ""),
+         "grade": str(row.get("grade") or "")}
         for row in rows[:8]]}

@@ -14,7 +14,7 @@ import outbound as O
 import send_safety as S
 
 TEXT = '方便，岗位负责哪个区域？'
-JOB = {'encryptJobId': 'j', 'jobName': '潮玩渠道经理', 'brandName': '戊示例科技'}
+JOB = {'encryptJobId': 'j', 'jobName': '虚构渠道经理', 'brandName': '戊示例科技'}
 FIXTURE = r'''
 let clicks=0;
 const location={pathname:state.path};
@@ -49,7 +49,7 @@ const window={getSelection:()=>({removeAllRanges(){},addRange(){}})};
 
 class Page:
     def __init__(self, **kwargs):
-        self.state = dict(path='/web/geek/chat', key='1', text='', panelText='何女士 戊示例科技 HRBP 更多 潮玩渠道经理 18-35K',
+        self.state = dict(path='/web/geek/chat', key='1', text='', panelText='虚构HR 戊示例科技 HRBP 更多 虚构渠道经理 20-30K',
                           panels=1, visible=True, buttons=1, disabled=False, bubble=True,
                           messages=[{'id':'h1','who':'friend','text':'方便聊聊吗？','ts':'100'}])
         self.state.update(kwargs)
@@ -91,10 +91,10 @@ class Round7(unittest.TestCase):
         return chat_send
     def test_identity_requires_brand_and_job_without_whitespace(self):
         c=self.module()
-        self.assertTrue(c.chat_identity_evidence('戊 示例 科技 潮玩渠道经理',JOB))
-        for text in ('戊示例科技','潮玩渠道经理','别家公司 其他岗位',''):
+        self.assertTrue(c.chat_identity_evidence('戊 示例 科技 虚构渠道经理',JOB))
+        for text in ('戊示例科技','虚构渠道经理','别家公司 其他岗位',''):
             self.assertFalse(c.chat_identity_evidence(text,JOB))
-        self.assertFalse(c.chat_identity_evidence('戊示例科技 潮玩渠道经理',{}))
+        self.assertFalse(c.chat_identity_evidence('戊示例科技 虚构渠道经理',{}))
     def test_contenteditable_dispatches_input_and_checks_readback(self):
         c=self.module();br=Page()
         self.assertTrue(c.type_into_chat(br,1,TEXT)['ok'])
@@ -134,36 +134,11 @@ class Round7(unittest.TestCase):
         self.assertEqual(self.greet(br),'error: chat_not_opened')
         self.assertEqual(br.clicks,0);self.assertEqual(br.state['text'],'')
     def test_greeting_wrong_panel_never_types_or_clicks(self):
-        br=Page(panelText='别家公司 潮玩渠道经理')
+        br=Page(panelText='别家公司 虚构渠道经理')
         self.assertEqual(self.greet(br),'send_aborted:identity_mismatch')
         self.assertEqual(br.clicks,0);self.assertEqual(br.state['text'],'')
     def test_greeting_without_new_bubble_stays_pending(self):
         br=Page(bubble=False)
         with self.assertRaisesRegex(RuntimeError,'unresolved_send'):
             self.greet(br)
-        self.assertEqual(S.ledger_latest(self.cfg)[0]['status'],'unknown')
-    def test_reply_to_and_auto_reply_use_contenteditable(self):
-        for cmd in ('reply-to','auto_reply','interview_reply'):
-            with self.subTest(cmd=cmd),tempfile.TemporaryDirectory() as root:
-                self.cfg['paths']={'workdir':root,'state':str(Path(root)/'state.json')}
-                msg=B.INTERVIEW_DEFAULT if cmd=='interview_reply' else TEXT
-                br=Page()
-                with patch.object(B.time,'sleep'):
-                    self.assertEqual(B.send_in_chat(br,1,msg,'方便','id:1',self.cfg,cmd),'replied')
-                self.assertEqual(br.clicks,1);self.assertEqual(br.state['text'],msg)
-    def test_reply_identity_and_turn_guard_survive_contenteditable(self):
-        br=Page(mutate='identity')
-        self.assertEqual(B.send_in_chat(br,1,TEXT,'方便','id:1',self.cfg),'send_aborted:identity_changed')
-        self.assertEqual(br.clicks,0)
-    def test_reply_confirmation_preserves_exact_multiline_text(self):
-        br=Page(); msg='方便，\n岗位负责哪个区域？'
-        with patch.object(B.time,'sleep'):
-            self.assertEqual(B.send_in_chat(br,1,msg,'方便','id:1',self.cfg),'replied')
-        self.assertEqual(br.state['messages'][-1]['text'],msg)
-
-    def test_reply_without_new_bubble_stays_pending(self):
-        br=Page(bubble=False)
-        with patch.object(B.time,'sleep'):
-            with self.assertRaisesRegex(RuntimeError,'unresolved_send'):
-                B.send_in_chat(br,1,TEXT,'方便','id:1',self.cfg)
         self.assertEqual(S.ledger_latest(self.cfg)[0]['status'],'unknown')

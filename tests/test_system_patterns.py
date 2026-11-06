@@ -28,7 +28,7 @@ class SystemPatternTests(unittest.TestCase):
 
     def test_normal_greeting_is_not_system(self):
         msg = {'classes': FRIEND_CLASS,
-               'text': '你好，看了你的简历，方便聊聊吗？我们主要做本地生活线下广告置换投放的，周末双休，不加班'}
+               'text': '你好，看了你的简历，方便聊聊吗？我们主要做虚构品牌线下广告置换投放的，周末双休，不加班'}
         self.assertFalse(CP.is_system_message(msg))
 
     def test_config_can_extend_patterns(self):

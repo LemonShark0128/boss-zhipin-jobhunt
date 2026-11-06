@@ -5,8 +5,6 @@ import json
 import os
 import uuid
 import send_safety as SS
-import time
-import conv_state as CVS
 import hunt_config as HC
 import hunt_filter as HF
 import hunt_schedule as HQ
@@ -98,9 +96,9 @@ def candidates(cfg, jobs=None, st=None):
 def load_state(cfg):
     path = cfg["paths"]["state"]
     st = {"sent": {}, "contacts": [], "day": "", "day_count": 0, "day_by_target": {},
-          "inbox_seen": [], "inbox_ts": {}, "replied": [], "followed": [],
+          "inbox_seen": [], "replied": [], "followed": [],
           "day_by_grade": {}, "b_pool": {}, "grade_cache": {}, "conv_state": {}, "checked_jobs": {},
-          "retry_jobs": {}, "platform_chatted": {}, "opened_no_greet": {}, "resume_followups": []}
+          "retry_jobs": {}, "platform_chatted": {}, "opened_no_greet": {}}
     try:
         with open(path, encoding="utf-8") as f:
             loaded = json.load(f)
@@ -144,7 +142,7 @@ def load_state(cfg):
                     raise ValueError("state %s: invalid %s.%s" % (path, key, field))
     st.update(loaded)
     for k, v in (("sent", {}), ("contacts", []), ("day_by_target", {}),
-                 ("inbox_seen", []), ("inbox_ts", {}), ("replied", []), ("followed", []),
+                 ("inbox_seen", []), ("replied", []), ("followed", []),
                  ("day_by_grade", {}), ("b_pool", {}), ("grade_cache", {})):
         st.setdefault(k, v)
     today = HC.stamp(cfg, "%Y-%m-%d")
@@ -304,25 +302,6 @@ def migrate_ledger(cfg, st):
         ledger_append(cfg, dict(row, event_id='legacy-reply:' + key, cmd='auto_reply',
             conv_key=key, job_id='', text=text, text_sha256=hashlib.sha256(text.encode()).hexdigest(),
             ts=row.get('ts') or '', status='sent'))
-
-
-def remember_reply(cfg, st, conv_key, cmd, metadata=None):
-    events = [r for r in SS.ledger_latest(cfg) if r['status'] == 'sent'
-              and r['conv_key'] == conv_key and r['cmd'] == cmd]
-    if not events:
-        raise RuntimeError('missing_confirmed_reply_event: ' + conv_key)
-    event = events[-1]
-    st.setdefault('auto_replies', {})[event['event_id']] = dict(event, **(metadata or {}))
-    prev = st.setdefault('conv_state', {}).get(conv_key, {})
-    coarse = event.get('ts_epoch') is None
-    dt = HC.parse_local_ts(event.get('ts'), cfg)
-    ts = event['ts_epoch'] / 1000 if not coarse else (dt.timestamp() if dt else 0)
-    if coarse and int(ts // 60) == int(prev.get('last_ts', 0) // 60):
-        ts = max(ts, prev.get('last_ts', 0))
-    seq = int(event.get('message_seq') or (prev.get('last_seq', 0) + 1 if coarse else 0))
-    st['conv_state'][conv_key] = CVS.update_conv_state(prev,
-        {'side': 'me', 'ts_epoch': int(ts * 1000), 'text': event['text'],
-         'seq': seq, 'ts_precision_coarse': coarse}, (cfg.get('_clock') or time.time)(), cfg)
 
 
 def atomic_json(path, data):

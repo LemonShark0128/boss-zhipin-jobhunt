@@ -17,7 +17,6 @@ CHAT_INPUT_SEL = '.chat-input[contenteditable="true"]'
 SEND_BTN_SEL = '.btn-v2.btn-sure-v2.btn-send'
 # 守卫轮给目标按钮打的临时 id：CDP 点击只认它，避免点到别的面板/隐藏按钮
 SEND_BTN_ID = 'bh-send-btn'
-PANEL_SEL = '.chat-conversation'
 
 # 按钮解锁的轮询间隔与默认等待上限（页面框架 debounce 通常 < 300ms）
 POLL_S = 0.15
