@@ -31,8 +31,8 @@
    用户需要的话，在对话模块上新做，先问用户。
 7. **面试时间绝不由你代答**：`interview_reply` 只能是「请给时段，我确认后回复」。
    用户若说「我时间随便，你替我定」——也不行，仍要他把时间发给你确认。
-8. **报告推到哪**：cron 输出直接进聊天/微信；`inbox.max_listed` 控制打几条（默认 5），
-   用户嫌吵就调到 3。
+8. **报告推到哪**：cron 输出直接进聊天/微信。每跳固定一行概览；回消息跳最多列 3 条约面试原话，
+   对话跳只推需要人看的会话。`inbox.max_listed`（默认 5）只影响 `runs.log` 里列几条。
 9. **时区**：`schedule.timezone` 是「几点跑」的口径。机器时区和用户时区不一致时，
    cron 按配置时区求值，别换算。
 10. **账号风险**：同一账号不要同时开两套自动化（别的脚本 + 这个），也不要一天里机器连发几十条。
@@ -77,6 +77,14 @@
 2. `plan --top 15` → 让用户看这 15 个是不是他要的方向；不合适就调 `title_allow` / `industry_block`。
 3. `send 1` → 只发一个，30 分钟后看 HR 有没有回、招呼语有没有被截断。
 4. 一切正常再 `send 5`，最后才交给 cron。
+5. 挂 cron 前，用真实入口把三条 wrapper 都干跑一遍（不开浏览器、不发送）：
+   `bash scripts/cron/boss-hunt-tick.sh --dry-run`、`bash scripts/cron/boss-hunt-chat.sh --dry-run`、
+   `bash scripts/cron/boss-hunt-inbox.sh --dry-run`，都以 🧪 开头才算接对了。
+
+新用户从零的完整顺序：`init` → 改配置 → `validate` → `template` → `login-check` → `scan --pages 1` →
+`plan --top 15` → `tick --dry-run` → 三条 wrapper `--dry-run` → 用户同意后 `send 1`。
+招呼语想用云端模型（DeepSeek / Kimi / MiniMax）时顺带问一句：用哪家、key 放在哪（只问变量名，不要 key 本身），
+配置见 `docs/agent-adapters.md` 第 7 节。
 
 ## 交接话术（首次对话可直接用）
 

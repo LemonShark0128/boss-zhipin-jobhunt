@@ -50,7 +50,7 @@
 | `skip_already_chatted` | 已经聊过 | 正常跳过；脚本会记入 `contacts` 防重 |
 | `skip_no_button` | 详情页 404 / 已下线 / 改版 | 偶发就是下架；大面积出现说明选择器失效 |
 | `unverified` | 发出去了但弹窗里没找到校验标记 | 让用户在消息页确认；频繁出现就改 `sending.verify_text` |
-| `err_fill` | 输入框没找到 | 可能被验证码页拦了；看当时的 tab 再判断 |
+| `fill_err` | 输入框没找到 | 可能被验证码页拦了；看当时的 tab 再判断 |
 | `err_template_too_long` | 招呼语 >380 字 | 砍内容，80–200 字最好 |
 
 `unverified` 也要在 UI 里复核：宁可少发一个，别让用户收到两条重复招呼。
@@ -77,7 +77,8 @@
 - 纯脚本任务（`no_agent`）崩了不会有任何聊天消息。Hermes 用
   `cronjob_manage(action='list')` 看 `last_status` / `last_error`；
   系统 crontab / launchd 则看 `data/cron.out` 与 `runs.log`。
-- 本地还要用**真实入口**跑一遍：`bash ~/.boss-hunt/run.sh`，别只测 `python3 boss_hunt.py`。
+- 本地还要用**真实入口**跑一遍：`bash scripts/cron/boss-hunt-tick.sh --dry-run`（wrapper 会把参数转给 tick，不发送），
+  别只测 `python3 boss_hunt.py`。
 - 脚本里所有「沿路径累加的列表/计数器」必须在任何 early return 之前初始化，
   否则第一次走到该分支就 `UnboundLocalError`，整跳一条都发不出去。
 - 用 `caffeinate -i -t 900` 包住长任务（macOS 一分钟就睡会冻住 Chrome、断桥）；
@@ -96,7 +97,7 @@
 ## 收件箱
 
 - 数字不对：打开消息页会把未读清零，`unreadMsgCount` 永远读到 0。
-  只能用 `lastMessageInfo.msgTime` + `fromId != myuid`。
+  只能用 `lastMessageInfo.msgTime` 判新旧；是谁发的看 `fromSelf` 与气泡 class（`snapshot_message_owner`），不用 `fromId`。
 - 回复发错人：对话模块发送前在同一次点击里核对会话身份（`chat_dom.atomic_chat_click` 比对 conv_key，
   不一致返回 `identity_changed` 不发）。这是**有意的保险**：宁可这条没回、让用户手工补，也不要发给不相干的人。
 - 系统消息（「您的附件简历已发送」「对方已同意」）不是 HR 说话，已被

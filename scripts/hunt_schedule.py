@@ -10,7 +10,46 @@ import hunt_filter as HF
 
 
 def validate_cfg(cfg):
+    """校验配置；字段类型不对时报错而不是让校验器自己崩（audit-01 R5）。"""
     errs, warns = [], []
+    shape = section_shape_errors(cfg)
+    if shape:  # audit-01 R6：段的形状不对就先指名报错，后面的细查会到处 .get 崩
+        return shape, warns
+    try:
+        _validate_cfg(cfg, errs, warns)
+    except (TypeError, ValueError, AttributeError, KeyError) as exc:
+        # 兜底不丢已收集的错误（audit-01 R6）
+        errs.append("配置里有字段类型不对，校验无法继续（%s）：请对照 assets/config.example.json 检查" % exc)
+    return errs, warns
+
+
+SECTION_KEYS = ("user", "filters", "scoring", "sending", "schedule", "grading", "conversation", "inbox")
+
+
+def section_shape_errors(cfg):
+    """各配置段必须是对象（或不写 / null），targets 必须是对象列表（audit-01 R6）。"""
+    errs = []
+    for key in SECTION_KEYS:
+        if cfg.get(key) is not None and not isinstance(cfg.get(key), dict):
+            errs.append("%s 必须是对象（现在是 %s）" % (key, type(cfg.get(key)).__name__))
+    targets = cfg.get("targets")
+    if targets is not None and (not isinstance(targets, list) or any(not isinstance(t, dict) for t in targets)):
+        errs.append("targets 必须是对象列表")
+    return errs
+
+
+def _int_field(errs, name, value):
+    """数字字段：缺省按 0；不是整数（或整数字符串）时记错并按 0 继续。"""
+    if value in (None, ""):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        errs.append("%s 必须是整数（现在是 %r）" % (name, value))
+        return 0
+
+
+def _validate_cfg(cfg, errs, warns):
     error = HC.same_hr_window_error(cfg)
     if error:
         errs.append(error)
@@ -31,8 +70,8 @@ def validate_cfg(cfg):
         if not code.isdigit():
             errs.append("targets[%s].city_code 必须是 BOSS 数字城市码（请从目标城市 URL 获取）" % t.get("name"))
     s = cfg.get("sending") or {}
-    cap = int(s.get("daily_cap") or 0)
-    gap = int(s.get("min_gap_seconds") or 0)
+    cap = _int_field(errs, "sending.daily_cap", s.get("daily_cap"))
+    gap = _int_field(errs, "sending.min_gap_seconds", s.get("min_gap_seconds"))
     if cap <= 0:
         errs.append("sending.daily_cap 必须 > 0")
     if cap > 25:
@@ -66,6 +105,7 @@ def validate_cfg(cfg):
             errs.append("user.greeting.length 不合理：需 40 ≤ min < max ≤ 380（BOSS 超 380 必拦）")
         if hi > 220:
             warns.append("greeting.length.max=%d 偏长，HR 在手机上多半看不到结尾" % hi)
+    _llm_provider_checks(cfg, gb, errs, warns)
     g = cfg.get("grading") or {}
     tracks = g.get("tracks") or {"A": {}, "B": {}}
     if not isinstance(tracks, dict):
@@ -139,17 +179,57 @@ def validate_cfg(cfg):
     return errs, warns
 
 
+
+def _llm_provider_checks(cfg, gb, errs, warns):
+    """user.greeting.llm 的服务商配置（harness-01）。招呼语 llm 模式或对话模块开着时模型真会被调，
+    写错算错误；都没用到时只提醒，不挡投递跳。"""
+    llm = gb["llm"]
+    conv = cfg.get("conversation") if isinstance(cfg.get("conversation"), dict) else {}
+    used = gb.get("mode") == "llm" or bool(conv.get("enabled"))
+    problems = []
+    provider = G.provider_name(llm)
+    if provider not in G.PROVIDERS:
+        problems.append("user.greeting.llm.provider=%r 不认识：只能是 %s；Kimi、MiniMax 等 OpenAI 兼容服务写 "
+                        "\"openai\"，再填它的 base_url 与 api_key_env" % (llm.get("provider"), " / ".join(G.PROVIDERS)))
+    elif G._cloud(llm):
+        raw = (((cfg.get("user") or {}).get("greeting") or {}).get("llm") or {})
+        base = raw.get("base_url")
+        if not base:
+            problems.append("user.greeting.llm.base_url 缺失：provider=%s 时必须写服务商的 OpenAI 兼容地址"
+                            "（默认值是本地 Ollama，不能用）" % provider)
+        elif not re.match(r"https?://", str(base)):
+            problems.append("user.greeting.llm.base_url 必须以 http:// 或 https:// 开头")
+        elif used and not (llm.get("api_key") or G._env_key(llm.get("api_key_env") or "DEEPSEEK_API_KEY", llm)):
+            warns.append("没找到模型 key %s（环境变量、llm.env_file / $BOSS_HUNT_ENV_FILE、~/.boss-hunt/.env、"
+                         "~/.hermes/.env 都没有）：招呼语会回退模板、对话承接句会留空"
+                         % (llm.get("api_key_env") or "DEEPSEEK_API_KEY"))
+    (errs if used else warns).extend(problems)
+
+
 def conversation_errors(cfg):
     """对话跳只需要的配置校验（conversation 段 + 各处正则）；validate 与 chat 入口共用（audit-01 Q5）。"""
     errs = []
-    if 'conversation' in cfg:
+    if cfg.get('conversation') is not None:  # audit-01 B1：null 视同没写（运行时本来就当关闭）
         conversation = cfg['conversation']
         if not isinstance(conversation, dict):
             errs.append('conversation 必须是对象')
         else:
-            for key in ('enabled', 'dry', 'auto_accept_resume_request'):
+            # audit-01 B1：pin_manual 写成 "false" 会被 bool() 当真、把置顶打开，必须是真正的布尔值
+            # audit-01 R7-B（用户 11-07「放开」）：pin_manual / decline_text 写 null 按没写处理（运行时本就落到默认值）
+            for key in ('enabled', 'dry', 'auto_accept_resume_request', 'pin_manual', 'decline_not_interested'):
+                if key == 'pin_manual' and conversation.get(key) is None:
+                    continue
                 if key in conversation and type(conversation[key]) is not bool:
                     errs.append('conversation.%s 必须是布尔值' % key)
+            if 'pin_max_per_hop' in conversation and (type(conversation['pin_max_per_hop']) is not int
+                                                       or conversation['pin_max_per_hop'] < 0):
+                errs.append('conversation.pin_max_per_hop 必须是非负整数')
+            if 'decline_industries' in conversation and (
+                    not isinstance(conversation['decline_industries'], list)
+                    or any(not isinstance(w, str) or not w.strip() for w in conversation['decline_industries'])):
+                errs.append('conversation.decline_industries 必须是非空字符串列表')
+            if conversation.get('decline_text') is not None and not isinstance(conversation['decline_text'], str):
+                errs.append('conversation.decline_text 必须是字符串')
             for key in ('daily_cap', 'per_hop', 'lookback_hours'):
                 if key in conversation and (type(conversation[key]) is not int or conversation[key] <= 0):
                     errs.append('conversation.%s 必须是正整数' % key)
@@ -165,6 +245,8 @@ def conversation_errors(cfg):
                 pattern = conversation['resume_sent_pattern']
                 if not isinstance(pattern, str):
                     errs.append('conversation.resume_sent_pattern 必须是字符串')
+                elif not pattern.strip():
+                    errs.append('conversation.resume_sent_pattern 不能为空（空正则会把任何新气泡当成简历已发送）')
                 else:
                     try:
                         re.compile(pattern)
@@ -187,6 +269,10 @@ def _regex_errors(cfg):
     def check(name, pattern):
         if not isinstance(pattern, str):
             errs.append('%s 必须是字符串' % name)
+            return
+        if not pattern.strip():
+            # audit-01 R4：空串正则匹配任何文本（全部判拒信 / 任何新气泡当简历回执）
+            errs.append('%s 不能为空（空正则会匹配所有消息）' % name)
             return
         try:
             re.compile(pattern)

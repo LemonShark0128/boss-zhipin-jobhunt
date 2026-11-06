@@ -5,6 +5,35 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-06
+
+### 新增 · 上手与换 Agent
+- 三条定时 wrapper 都在仓库里：新增投递跳 `scripts/cron/boss-hunt-tick.sh`，与对话跳、回消息跳共用同一把 flock；
+  额外参数原样转给子命令（`--dry-run` 不再被丢掉变成真跳）。
+- `chat --dry-run`、`inbox --dry-run`：离线校准，只校验配置并说明真跳会做什么，不开浏览器、不拿锁、不写 state / 日志；
+  挂定时前三条 wrapper 都能加 `--dry-run` 校准一遍。`chat --dry`（连浏览器预演）不变。
+- `validate` 检查 `user.greeting.llm.provider`：只认 ollama / deepseek / openai / cloud（Kimi、MiniMax 等 OpenAI 兼容服务写 `openai`）；
+  以前写成厂商名会被静默当成本地 Ollama。云端 provider 必须显式写 http(s) `base_url`；找不到 key 给警告。
+  招呼语 llm 模式或对话模块开着时算错误，否则只提醒。
+- `docs/agent-adapters.md` 新增 WorkBuddy / DeepSeek Harness / Kimi Code / MiniMax Code 的接法（逐项标已核实 / 未核实），
+  以及 DeepSeek / Kimi / MiniMax 三段可直接粘贴的模型配置；README、SKILL、AGENTS、访谈清单补上新用户从零的完整顺序。
+
+### 变更
+- 配置校验更早、更严：`tick`（含干跑）与 `chat` 一进入就校验配置，有错本跳不跑并指名报错；校验器遇到类型不对的字段不再崩、
+  会指出键名；对话配置补布尔 / 整数 / 列表类型校验；空串正则不再算合法；`conversation`、`decline_text`、`pin_manual`
+  写 `null` 视同没写。
+- 配置模板去掉收件箱旧正则；`run` 的顺延缺省与真发一致；`unanswered` 超时阈值默认跟 `inbox.stale_hours`。
+- 定时写法改为挂在 `schedule.windows` 整点，不再建议每 10 分钟跑 tick（会和对话跳抢锁）。
+
+### 修复
+- `--json` 在配置损坏、配置路径是目录、配置段形状不对、连桥失败时也只输出一个 JSON；文本模式遇到非预期异常保留堆栈。
+- 播报：对话跳推送不再带账本命令与 event_id；锁被占、流水损坏、读不到配置时推人话、不带本机路径；回消息跳失败不再跟一行全 0 概览；
+  「约面试 N」只数还没回过的；待核对提示分清对话挂起 / 投递挂起 / 流水损坏；投递跳播报认配置错误与干跑，干跑不写 `broadcasts.log`；
+  `broadcasts.log` 跟配置的 workdir 走、时间按配置时区；播报脚本容忍 JSON 前后的杂讯。
+- 配置的系统消息正则在对话模块各处与发送闸门都生效。
+- 招呼语缓存坏了不再整份覆盖（改名留证）；招呼语缓存或 `conversations.json` 坏了收件箱照常只读；自定义与默认面试话术都认。
+- `.env` 里的空占位不再挡住后面文件的真 key，认 `export` 前缀。
+
 ## [0.3.0] - 2026-11-06
 
 ### 变更 · 收件箱只读（破坏性）

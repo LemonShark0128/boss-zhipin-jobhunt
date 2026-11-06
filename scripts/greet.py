@@ -577,14 +577,20 @@ def _cache_path(cfg):
     return os.path.join(wd, "greet_cache.json") if wd else ""
 
 
-def _cache_load(cfg):
+def _cache_load(cfg, strict=False):
+    """读招呼语缓存；坏文件返回 {}。strict=True 时坏文件抛 ValueError（写入前用，避免整份覆盖）。"""
     p = _cache_path(cfg)
     if not p or not os.path.exists(p):
         return {}
     try:
         with open(p, encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("greet_cache is not an object")
+        return data
     except Exception:
+        if strict:
+            raise ValueError("greet_cache_corrupt")
         return {}
 
 
@@ -592,7 +598,15 @@ def _cache_put(cfg, key, row):
     p = _cache_path(cfg)
     if not p:
         return
-    data = _cache_load(cfg)
+    try:
+        data = _cache_load(cfg, strict=True)
+    except ValueError:
+        # audit-01 R3：坏文件改名留证再重建，不再当作空缓存整份覆盖
+        try:
+            os.replace(p, p[:-len(".json")] + ".corrupt-%d.json" % int(time.time()))
+        except OSError:
+            return
+        data = {}
     data[key] = row
     tmp = p + ".tmp"
     try:
@@ -640,15 +654,30 @@ def _env_key(name, llm=None):
             with open(os.path.expanduser(p), encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
+                    if line.startswith("export "):
+                        line = line[len("export "):].lstrip()  # audit-01 R4：认 export 前缀
                     if line.startswith(name + "="):
-                        return line.split("=", 1)[1].strip().strip('"').strip("'")
+                        value = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        if value:
+                            return value
+                        # 空占位不挡住后面文件里的真 key（audit-01 R4）
         except Exception:
             continue
     return ""
 
 
+# 走 OpenAI 兼容 /chat/completions 的 provider 名。Kimi（Moonshot）、MiniMax 等任何 OpenAI 兼容服务
+# 都写 "openai" 并填自己的 base_url / api_key_env（harness-01；validate 会拦厂商名写进 provider）。
+CLOUD_PROVIDERS = ("deepseek", "openai", "cloud")
+PROVIDERS = ("ollama",) + CLOUD_PROVIDERS
+
+
+def provider_name(llm):
+    return str(llm.get("provider") or "ollama").strip().lower()
+
+
 def _cloud(llm):
-    return str(llm.get("provider") or "ollama").lower() in ("deepseek", "openai", "cloud")
+    return provider_name(llm) in CLOUD_PROVIDERS
 
 
 def ollama_status(cfg):

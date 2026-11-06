@@ -25,15 +25,32 @@ def config_path(args):
 
 
 def same_hr_window_error(cfg):
+    if cfg.get("filters") is not None and not isinstance(cfg.get("filters"), dict):
+        return "filters 必须是对象"  # audit-01 R6：load_config 抛 ValueError，validate 能指名
     days = (cfg.get("filters") or {}).get("same_hr_window_days")
     if days is not None and (type(days) is not int or days < 0):
         return "filters.same_hr_window_days 必须是 null 或非负整数"
     return None
 
 
+def stale_hours(cfg):
+    """inbox.stale_hours；没写或写成 null 都按 72（audit-01 R5）。"""
+    value = (cfg.get("inbox") or {}).get("stale_hours")
+    return 72.0 if value is None else float(value)
+
+
 def load_config(path, create_dirs=True):
     with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
+    # audit-01 R5：顶层和 paths 必须是对象，否则后面到处 .get 崩成堆栈
+    if not isinstance(cfg, dict):
+        raise ValueError("配置顶层必须是 JSON 对象")
+    if cfg.get("paths") is not None and not isinstance(cfg.get("paths"), dict):
+        raise ValueError("paths 必须是对象")
+    if cfg.get("paths") is None:
+        cfg.pop("paths", None)
+    elif cfg["paths"].get("workdir") is None:
+        cfg["paths"].pop("workdir", None)  # audit-01 R6：null 按没写处理，与 wrapper 一致
     error = same_hr_window_error(cfg)
     if error:
         raise ValueError(error)

@@ -78,7 +78,8 @@ def send_text(br, tab, cfg, conv_key, job, text, template_part, opener_part=''):
     # Keep raw history for stale-draft and ledger baselines; ignore systems only for turns.
     raw_messages = before.get('messages') or []
     system_texts = conv_parse.system_message_texts(cfg)
-    messages = [m for m in raw_messages if not conv_parse.is_system_message(m, system_texts)]
+    system_pats = conv_parse.system_patterns(cfg)  # audit-01 R3
+    messages = [m for m in raw_messages if not conv_parse.is_system_message(m, system_texts, system_pats)]
     if any(m.get('who') not in {'mine', 'friend'} for m in messages):
         return 'send_aborted:owner_unknown'
     with SS.state_lock(cfg['paths']['state'], reentrant=True):
@@ -92,7 +93,7 @@ def send_text(br, tab, cfg, conv_key, job, text, template_part, opener_part=''):
                 return 'fill_err'
             clicked = chat_dom.atomic_chat_click(
                 br, tab, conv_key, text, chat_dom.normalized_history(raw_messages),
-                system_texts=system_texts)
+                system_texts=system_texts, system_pats=system_pats)
             outcome = CS.click_outcome(clicked)
             if outcome == 'aborted':
                 return 'send_aborted:' + clicked['reason']

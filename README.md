@@ -101,16 +101,18 @@ python3 scripts/boss_hunt.py init          # 生成 ~/.boss-hunt/config.json
    python3 scripts/boss_hunt.py send 1
    ```
    看 HR 有没有回、招呼语有没有被截断，没问题再 `send 5`。
-5. **交给定时任务**（可选）：
+5. **交给定时任务**（可选）：用仓库里的 wrapper——投递跳 `scripts/cron/boss-hunt-tick.sh`，开了对话模块还要挂
+   对话跳 `scripts/cron/boss-hunt-chat.sh`（回 HR 的唯一通道），回消息跳 `scripts/cron/boss-hunt-inbox.sh` 只读播报可选。
+   三个共用一把锁、互不打架；cron 写法见 [`docs/agent-adapters.md`](docs/agent-adapters.md) 第 3 节。
    ```bash
-   # ~/.boss-hunt/run.sh
-   #!/bin/bash
-   cd ~/.boss-hunt
-   caffeinate -i /usr/bin/python3 /path/to/repo/scripts/boss_hunt.py tick
+   python3 /path/to/repo/scripts/boss_hunt.py tick --dry-run   # 先看各窗口会做什么（不开浏览器、不发送）
+   bash scripts/cron/boss-hunt-tick.sh --dry-run    # 挂 cron 前用真实入口把三条 wrapper 都干跑一遍
+   bash scripts/cron/boss-hunt-chat.sh --dry-run    # 不开浏览器：说明对话跳开没开、在不在时段
+   bash scripts/cron/boss-hunt-inbox.sh --dry-run   # 不开浏览器：校验配置、说明真跳只读哪段消息
    ```
-   `cron: */10 * * * *`（tick 以 `schedule.timezone` 求值）。macOS 上必须用 `caffeinate`
-   包住，否则系统睡眠会冻住 Chrome、断开本地桥；Linux / Windows 去掉 `caffeinate`，
-   改用本机等价物（如 `systemd-inhibit`）或不防止睡眠。
+   cron 挂在 `schedule.windows` 的整点上（如 `0 8,10,12,14,16,18,20,22 * * *`；tick 以 `schedule.timezone` 求值、窗口前后 10 分钟内都认）。仓库 wrapper 在 macOS 上自动用
+   `caffeinate` 防睡眠（否则系统睡眠会冻住 Chrome、断开本地桥），Linux 上没有就不加（可自行套 `systemd-inhibit`）；
+   Windows 没有 `fcntl`，wrapper 跑不了，需要自写等价的单实例锁。
 
 ## 配置说明
 
@@ -214,9 +216,9 @@ python3 scripts/boss_hunt.py summary --json
 
 ## 单入口排班与拒绝复盘
 
-cron 每 10 分钟调用 `tick`，由 `schedule.timezone` 和 `windows` 判窗口（同日 ±10 分钟）：
-`scan_windows` 扫描后投递，`inbox_windows` 只处理收件箱，其他窗口只投递，
-`summary_window` 额外总结；只有总结的窗口只出总结。各专用窗口须列入 `windows`。
+cron 在窗口整点调用 `tick`（也可以每 10 分钟调，但开了对话模块就别这样，会和 :30 对话跳抢锁），由 `schedule.timezone` 和 `windows` 判窗口（同日 ±10 分钟）：
+每个窗口都投递：`scan_windows` 先补池再投递，`inbox_windows` 投递后再读收件箱（只读），
+`summary_window` 投递后追加当天总结。各专用窗口须列入 `windows`（以 `tick --dry-run` 的 `actions` 为准）。
 同日同窗口成功后不会重复执行；失败保留未用额度，后跳重新摊分。
 
 `tick` 与现有 wrapper 共用 `data/.lock`。外层 wrapper 不要再持同一把锁调用 tick，
@@ -248,14 +250,15 @@ python3 scripts/boss_hunt.py greet --job-id <id> [--times 2] [--no-cache]   # �
 python3 scripts/boss_hunt.py scan  [--target 名称] [--keyword 词] [--pages 3]
 python3 scripts/boss_hunt.py plan  [--top 20]     # 干跑：只报告
 python3 scripts/boss_hunt.py send  N              # 真发
-python3 scripts/boss_hunt.py inbox                # 盯消息 + 分类（只读，不发消息）
-python3 scripts/boss_hunt.py chat                 # 对话模块：回 HR / 发简历（会真发）
+python3 scripts/boss_hunt.py inbox [--dry-run]    # 盯消息 + 分类（只读，不发消息）；--dry-run 不开浏览器
+python3 scripts/boss_hunt.py chat  [--dry-run]    # 对话模块：回 HR / 发简历（会真发）；--dry-run 离线校准，--dry 连浏览器预演
 python3 scripts/boss_hunt.py tick  [--dry-run]    # 定时投递跳入口：按窗口补池 + 投递
 python3 scripts/boss_hunt.py run   [--send N] [--inbox]   # 手动一键，定时任务不用它
 ```
 
 配置查找顺序：`--config PATH` → `$BOSS_HUNT_CONFIG` → `~/.boss-hunt/config.json`。
-运行数据（`config.json`、`state.json`、`raw/`、`runs.log`）默认在 `~/.boss-hunt/`，不会上传到任何地方。
+运行数据（`config.json`、`state.json`、`raw/`、`runs.log`、`send_ledger.jsonl`、`conversations.json`）默认在
+`~/.boss-hunt/`，本项目不会把它们上传到任何地方（招呼语 / 承接句若配置云端模型，见 FAQ「数据会上传到哪」）。
 
 输出示例：
 
@@ -296,7 +299,7 @@ python3 scripts/boss_hunt.py validate --json   # 有错时 exit=1
 | `template --json` | `text`、`chars`、`marker`、`recommended_chars`、`hard_max` |
 | `grade --json` | `grade`、`reason`、`scores`、`final` |
 | `grades --json` | `counts`、`applied`、`total`、`items[]` |
-| `tick --json` | `actions`、`window`、`dry_run`（干跑）、`send` / `inbox` / `summary`（执行时） |
+| `tick --json` | `actions`、`window`、`workdir`、`dry_run`（干跑）、`send` / `inbox` / `summary`（执行时）；配置有误时 `ok=false` 与 `errors[]`（本跳不跑） |
 | `rejects --json` | `total`、`by_kind` / `by_attribution` / `by_reason` / `by_grade` / `by_target` |
 | `summary --json` | `sent`、`by_grade`、`rejects`、`no_reply`、`reason_breakdown`、`pending`、`activity` |
 | `run --json` | `scan`、`candidates`、`send`、`inbox`、`tabs_closed` |
@@ -354,6 +357,7 @@ CHANGELOG 注明。
 | 遵循 Agent Skills 规范（Hermes、Claude Code…） | `SKILL.md` | 整个目录放进技能目录，按 `description` 自动触发 |
 | 读 `AGENTS.md` 的 harness（Codex CLI、Cursor、自建或厂商 harness） | `AGENTS.md` | 克隆到任意位置，不用安装、不用改配置 |
 | 只执行 shell / 自己写的小 harness | `scripts/boss_hunt.py` | 直接跑命令，输出是纯文本，自己解析 |
+| WorkBuddy / DeepSeek Harness / Kimi Code / MiniMax Code | `AGENTS.md` | 逐家核实情况见 [`docs/agent-adapters.md`](docs/agent-adapters.md) 第 6 节 |
 
 ```bash
 # Hermes
@@ -408,7 +412,10 @@ macOS `open -a`、Linux `google-chrome` / `chromium`、Windows `start chrome`（
 经历的回复都不会被自动发出。
 
 **数据会上传到哪？**
-不会上传。`state.json` / `raw/` 全在本地，仓库的 `.gitignore` 已排除这些路径。
+运行数据（`state.json`、`raw/`、`send_ledger.jsonl`、`conversations.json` 等）全在本地，仓库的 `.gitignore` 已排除。
+例外是模型：`user.greeting.llm.provider` 用本地 Ollama 时什么都不出本机；配成 `deepseek` / `openai` 等云端模型时（Kimi、MiniMax 等 OpenAI 兼容服务写 `openai`，配置见
+[`docs/agent-adapters.md`](docs/agent-adapters.md) 第 7 节），
+岗位 JD 片段、你的事实清单和 HR 原话会作为提示词发给该服务商，用之前请自己权衡。
 
 ## 贡献
 

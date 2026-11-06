@@ -1,12 +1,11 @@
 """Round 3: temporary state and browser/model substitutes only."""
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import test_broadcast_visibility_20261029 as V
 
 B, F = V.B, V.F
 import hunt_state as HS
-import outbound as O
 import outbound as O
 
 

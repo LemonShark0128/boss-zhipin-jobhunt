@@ -9,13 +9,32 @@ import json
 import sys
 
 
+# audit-01 R4：与 boss_hunt.PENDING_SCOPE_TEXT 同口径；对话挂起只停那个会话，别说成投递也停了
+PENDING_TEXT = {
+    "conv": "⚠️ 有对话发送待核对（只停那个会话，投递照常）",
+    "outbound": "⚠️ 有投递发送待核对，投递暂停中（先确认那个 HR 有没有收到消息）",
+    "corrupt": "⚠️ 发送流水文件损坏，投递和对话暂停中（需要先修复流水）",
+}
+
+
 def render(data):
     lines = []
+    if data.get("dry_run"):  # onboard-01：inbox --dry-run 离线校准，不是一次真读，别出全 0 概览
+        if data.get("message"):
+            return [data["message"]]
+        return ["🧪 回消息跳干跑失败：%s" % (data.get("error") or "未知")]
     if data.get("ok") is False:
-        lines.append("⚠️ BOSS 回消息跳失败：%s" % (data.get("error") or data.get("reason") or "未知"))
+        error = str(data.get("error") or data.get("reason") or "未知")
+        if error.startswith("另一个实例在跑"):  # audit-01 R5：不推锁路径
+            lines.append("⏭ 回消息跳：上一跳还在跑，本跳跳过")
+        else:
+            lines.append("⚠️ BOSS 回消息跳失败：%s" % error)
     if data.get("pending_verification"):
-        lines.append("⚠️ 有待核对的发送，投递和对话暂停中（先确认那个 HR 有没有收到消息）")
-    interviews = [x for x in (data.get("interviews") or []) if isinstance(x, dict)]
+        lines.append(PENDING_TEXT.get(data.get("pending_scope"), PENDING_TEXT["outbound"]))
+    if data.get("ok") is False:
+        return lines  # audit-01 R4：失败时不再跟一行全 0 概览（像是读成功了只是没消息）
+    # audit-01 B2：只数对话模块还没回过「请先给时段」的；已回过的由对话跳负责，不再每跳重复列
+    interviews = [x for x in (data.get("interviews") or []) if isinstance(x, dict) and not x.get("replied")]
     interest = data.get("interest") or []
     counts = (data.get("unanswered") or {}).get("counts") or {}
     lines.append("💬 回消息跳｜约面试 %d｜感兴趣 %d｜待你回 %d" % (
@@ -36,7 +55,7 @@ def main():
         print(raw[-300:])
         return 0
     try:
-        data = json.loads(raw[start:])
+        data = json.JSONDecoder().raw_decode(raw[start:])[0]  # 后面跟着 stderr 文本也能读（audit-01 R4）
         if not isinstance(data, dict):
             raise ValueError("json is not an object")
     except Exception:

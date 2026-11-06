@@ -14,7 +14,7 @@
 | 3 | [`docs/onboarding-interview.md`](docs/onboarding-interview.md) | 用户资料不全，需要一次性问完（8 必问 + 10 常被忘） |
 | 4 | [`docs/risk-control.md`](docs/risk-control.md) | 任何调整频率、上限、时段之前 |
 | 5 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | 报 `NO_EXTENSION` / `unverified` / 定时任务没跑 |
-| 6 | [`docs/agent-adapters.md`](docs/agent-adapters.md) | 要换成你自己的浏览器或定时能力 |
+| 6 | [`docs/agent-adapters.md`](docs/agent-adapters.md) | 要换成你自己的浏览器或定时能力；WorkBuddy / DeepSeek Harness / Kimi Code / MiniMax Code 的核实情况（第 6 节）；招呼语换 DeepSeek / Kimi / MiniMax（第 7 节） |
 
 `SKILL.md` 的 frontmatter 符合 Agent Skills 规范（`name` + `description`），
 Claude Code（`~/.claude/skills/<name>/`）和 Hermes（`~/.hermes/skills/<category>/<name>/`）
@@ -66,7 +66,10 @@ python3 scripts/boss_hunt.py validate --json         # 有错 exit=1
 - `plan` 的前几条是用户真想要的方向，不是关键词硬匹配出来的噪声。
 - 防重复守卫有效：对已投过的岗位必须返回 `skip_already_chatted` 且不点按钮。
 - 真发属于用户决策 —— 读路径跑通即可，发几个试试之前先问用户。
-- 挂定时任务后，用**真实入口**（wrapper 脚本）跑一次，别只测 `python3 boss_hunt.py`。
+- 挂定时任务前，三条 wrapper 都用**真实入口**加 `--dry-run` 跑一次（不开浏览器、不发送）：
+  `bash scripts/cron/boss-hunt-tick.sh --dry-run`、`bash scripts/cron/boss-hunt-chat.sh --dry-run`、
+  `bash scripts/cron/boss-hunt-inbox.sh --dry-run`；别只测 `python3 boss_hunt.py`。
+- 定时用系统 cron / launchd 跑 wrapper，不要用你自己的「定时跑提示词」能力代替（花 token，且模型可能改参数多发）。
 
 ## 不该做的事
 

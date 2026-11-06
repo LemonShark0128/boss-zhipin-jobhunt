@@ -2,7 +2,6 @@
 import os, sys, unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 import chat_dom as CD
-import boss_hunt as B
 
 
 class StubBrowser:

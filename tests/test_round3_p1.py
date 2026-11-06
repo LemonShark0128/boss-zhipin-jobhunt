@@ -1,5 +1,4 @@
 """One offline regression group for every round-three P1."""
-import io
 import json
 from pathlib import Path
 import sys

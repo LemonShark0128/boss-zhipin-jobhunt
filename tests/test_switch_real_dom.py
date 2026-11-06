@@ -9,8 +9,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
-import boss_hunt as B  # noqa: E402
-import outbound as O
+import outbound as O  # noqa: E402
 
 CTX = "启用招呼语 启用后，将在沟通时自动发送招呼语"
 

@@ -301,10 +301,10 @@ def normalized_history(history):
     return [{k: m.get(k) or '' for k in ('who', 'id', 'text', 'ts')} for m in history]
 
 
-def atomic_chat_click(br, tab, key, text, expected_history=None, *, system_texts=None):
+def atomic_chat_click(br, tab, key, text, expected_history=None, *, system_texts=None, system_pats=None):
     """Bind the shared sender to independent conversation and round evidence."""
     guard = "const expected = %s, expectedHistory = %s;" % (
-        json.dumps(key), json.dumps(expected_history, ensure_ascii=False)) + conv_parse.system_message_parser_js(system_texts) + r"""
+        json.dumps(key), json.dumps(expected_history, ensure_ascii=False)) + conv_parse.system_message_parser_js(system_texts, system_pats) + r"""
       const header = panel.querySelector('.chat-title,.title-box');
       const key = identity(header) || identity(panel);
       if (key !== expected) return fail('identity_changed');

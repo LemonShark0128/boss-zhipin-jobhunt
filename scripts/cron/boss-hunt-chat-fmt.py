@@ -4,12 +4,26 @@ import json
 import sys
 
 
+def human_error(error):
+    """audit-01 R4：推送出去的文本不带命令、event_id（SKILL 播报规则；投递/回消息跳早已转人话）。"""
+    error = str(error or '未知错误')
+    if error.startswith('unresolved_send'):
+        return '⛔ 有待核对的发送，对话本跳暂停（先确认那个 HR 有没有收到消息，我再核对放行）'
+    if error.startswith('另一个实例在跑'):  # audit-01 R5：不推锁路径
+        return '⏭ 上一跳还在跑，本跳跳过'
+    if error.startswith('skip_ledger_corrupt'):
+        return '⛔ 发送流水文件损坏，对话本跳暂停（需要先修复流水）'
+    return '⚠️ 对话失败：' + error
+
+
 def render(data):
     lines = list(data.get('notifications') or [])
+    if data.get('dry_run') and data.get('message'):  # onboard-01：chat --dry-run 离线校准只推这一句
+        lines.append(data['message'])
     if data.get('ok') is False and not lines:
-        lines.append('⚠️ 对话失败：' + str(data.get('error') or '未知错误'))
-    if data.get('pending_verification') and not any('待核实' in line for line in lines):
-        lines.append('⚠️ 待核实，请先运行 ledger-ack --list')
+        lines.append(human_error(data.get('error')))
+    if data.get('pending_verification') and not any('待核' in line for line in lines):
+        lines.append('⚠️ 有发送结果待核对（先确认那个 HR 有没有收到消息）')
     if data.get('dry_run'):
         for plan in data.get('plans') or []:
             for action in plan.get('actions') or []:
@@ -25,7 +39,10 @@ def render(data):
 def main():
     raw = sys.stdin.read()
     try:
-        data = json.loads(raw)
+        start = raw.find('{')
+        if start < 0:
+            raise ValueError('no JSON object')
+        data = json.JSONDecoder().raw_decode(raw[start:])[0]  # 前后有杂讯也能读（audit-01 R4）
         if not isinstance(data, dict):
             raise ValueError('expected JSON object')
         text = render(data)

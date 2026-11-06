@@ -295,7 +295,8 @@ def _resume_card(cfg, history):
     pattern = re.compile(options.get(
         'resume_sent_pattern', conv_actions.DEFAULT_RESUME_SENT_PATTERN))
     system_texts = conv_parse.system_message_texts(cfg)
-    if any(conv_parse.is_system_message(m, system_texts) and pattern.search(m.get('text') or '')
+    system_pats = conv_parse.system_patterns(cfg)  # audit-01 R3：配置的系统正则每处都生效
+    if any(conv_parse.is_system_message(m, system_texts, system_pats) and pattern.search(m.get('text') or '')
            for m in history[indices[-1]+1:]):
         return None
     return card
@@ -417,8 +418,12 @@ def run(cfg, br, out, now=None, dry=False):
         # safety-01：只有非对话的未核实（投递/旧 inbox/账本损坏）才停整跳；对话挂起只停它自己的会话
         SS.ledger_guard(cfg, scope='outbound')
     except RuntimeError as exc:
-        line = '⚠️ 待核实 ' + str(exc)
-        out.append(line)
+        # audit-01 R4：推送只放人话（不带命令/event_id），原始异常留在 runs.log 与 error 字段
+        out.append('⚠️ 待核实 ' + str(exc))
+        if str(exc).startswith('skip_ledger_corrupt'):
+            line = '⛔ 发送流水文件损坏，对话本跳暂停（需要先修复流水）'
+        else:
+            line = '⛔ 有待核对的投递发送，对话本跳暂停（先确认那个 HR 有没有收到消息）'
         result.update(ok=False, pending_verification=True, error=str(exc), notifications=[line])
         return result
     if not options.get('enabled', False):
@@ -431,6 +436,7 @@ def run(cfg, br, out, now=None, dry=False):
         result['reason'] = 'outside_hours'
         return result
     system_texts = conv_parse.system_message_texts(cfg)
+    system_pats = conv_parse.system_patterns(cfg)  # audit-01 R3：配置的系统正则每处都生效
     resume_sent_pattern = re.compile(options.get(
         'resume_sent_pattern', conv_actions.DEFAULT_RESUME_SENT_PATTERN))
     now_ts = now.timestamp()
@@ -563,7 +569,7 @@ def run(cfg, br, out, now=None, dry=False):
                 result['brand_blocked'] += 1
                 if not row['notified'].get('manual'):
                     row['notified']['manual'] = True
-                    said = '' if conv_parse.is_system_message({'text': snap['text']}, system_texts) else snap['text'][:30]
+                    said = '' if conv_parse.is_system_message({'text': snap['text']}, system_texts, system_pats) else snap['text'][:30]
                     line = '🔒 屏蔽公司 %s｜%s：%s（不自动处理，需你手动看）' % (row['brand'], row['boss'], said)
                     result['notifications'].append(line)
                     out.append(line)
@@ -621,7 +627,7 @@ def run(cfg, br, out, now=None, dry=False):
         notified_out_of_view = 0
         def notify_out_of_view(key, item, snap):
             nonlocal notified_out_of_view
-            if (conv_parse.is_system_message({'text': snap['text']}, system_texts)
+            if (conv_parse.is_system_message({'text': snap['text']}, system_texts, system_pats)
                     or resume_sent_pattern.search(snap['text'])
                     or records.get(key, {}).get('out_of_view_snap') == snap):
                 return
@@ -668,7 +674,7 @@ def run(cfg, br, out, now=None, dry=False):
         for _, key, item, snap in sorted(manual_new, key=lambda entry: entry[0]):
             if result['manual_new'] >= MANUAL_NEW_MAX_PER_HOP:
                 break
-            if (conv_parse.is_system_message({'text': snap['text']}, system_texts)
+            if (conv_parse.is_system_message({'text': snap['text']}, system_texts, system_pats)
                     or resume_sent_pattern.search(snap['text']) or is_own_text(snap['text'])):
                 continue
             row = records[key] if dry else copy.deepcopy(records[key])
@@ -766,9 +772,9 @@ def run(cfg, br, out, now=None, dry=False):
                 continue
             raw_history = history
             resume_evidence = next((m for m in history
-                                    if conv_parse.is_system_message(m, system_texts) and
+                                    if conv_parse.is_system_message(m, system_texts, system_pats) and
                                     resume_sent_pattern.search(str(m.get('text') or ''))), None)
-            history = [m for m in history if not conv_parse.is_system_message(m, system_texts)]
+            history = [m for m in history if not conv_parse.is_system_message(m, system_texts, system_pats)]
             if any(m.get('who') not in ('mine', 'friend') for m in history):
                 result['owner_unknown'] += 1
                 continue

@@ -31,13 +31,36 @@ STOP_NAMES = {
 }
 
 
+def render_dry_run(d):
+    """audit-01 R7：干跑只出一行计划（或配置错误），不写 broadcasts.log。"""
+    if d.get("errors"):
+        return ["🧪 干跑：配置有误"] + ["· %s" % e for e in d["errors"][:3]]
+    if d.get("ok") is False:  # audit-01 R8：读配置报错等不走 errors[] 的失败，别误报成「不在窗口」
+        return ["🧪 干跑：失败 %s" % (d.get("error") or d.get("reason") or "未知")]
+    if not d.get("actions"):
+        return ["🧪 干跑：%s 不在窗口，这跳什么都不做" % (d.get("now") or "")]
+    budget = (d.get("budget") or {}).get("limit", 0)
+    quotas = d.get("quotas") or {}
+    return ["🧪 干跑：%s 跳做 %s｜本跳预算 %s｜配额 %s" % (
+        d.get("window") or "?", "/".join(d.get("actions") or []), budget,
+        " · ".join("%s %s" % (k, v) for k, v in quotas.items()))]
+
+
 def render(d):
+    if d.get("dry_run"):
+        return render_dry_run(d)
     lines = []
+    if d.get("errors"):  # audit-01 R7：配置有误时 tick 不跑，原来只推「失败：未知」
+        lines.append("⚠️ BOSS 投递跳：配置有误，本跳不跑")
+        lines.extend("· %s" % e for e in d["errors"][:3])
+        return lines
     win = d.get("window") or (d.get("catch_up") or {}).get("window") or "?"
     err = str(d.get("error") or "")
     if err.startswith("unresolved_send"):
         lines.append("⛔ 有待核对的发送，投递和回复全部暂停")
         lines.append("   先确认那个 HR 有没有收到消息，我再核对放行")
+    elif err.startswith("skip_ledger_corrupt"):  # audit-01 R5：不把修复命令推出去
+        lines.append("⛔ 发送流水文件损坏，投递和对话暂停（需要先修复流水）")
     elif "captcha" in err:
         lines.append("⚠️ 撞验证码，本轮停（额度留到下跳）")
     elif d.get("ok") is False:
@@ -112,16 +135,13 @@ def render(d):
 
     inbox = d.get("inbox")
     if isinstance(inbox, dict) and inbox:
-        counts = inbox.get("auto_reply_counts") or {}
-        if counts.get("new_greet", 0) > 0:
-            lines.append("自动回话：新招呼 %d 个｜回 %d｜需人工 %d｜打开失败 %d｜我最后说过 %d｜归属不明 %d" % (
-                counts["new_greet"], counts["replied"], counts["manual"], counts["open_failed"],
-                counts["already_mine"], counts["owner_unknown"]))
-        interviews = inbox.get("interviews") or []
-        replied = inbox.get("auto_replied") or inbox.get("replied_ok") or []
-        failed = inbox.get("auto_failed") or inbox.get("reply_failed") or []
-        lines.append("💬 回消息｜已回 %d｜约面试 %d｜失败 %d" % (
-            len(replied), len(interviews), len(failed)))
+        # audit-01 R3：inbox 只读（cleanup-02），与回消息跳播报同一口径，不再报旧链路的「已回/失败/自动回话」
+        counts = (inbox.get("unanswered") or {}).get("counts") or {}
+        lines.append("💬 回消息｜约面试 %d｜感兴趣 %d｜待你回 %d" % (
+            # audit-01 B2：只数对话模块还没回过的约面试
+            len([x for x in inbox.get("interviews") or [] if isinstance(x, dict) and not x.get("replied")]),
+            len(inbox.get("interest") or []),
+            int(counts.get("waiting_me") or 0)))
 
     summary = d.get("summary")
     if isinstance(summary, dict) and summary:
@@ -141,21 +161,49 @@ def render(d):
     return lines
 
 
+def _config_workdir():
+    """与 hunt_config.load_config 同一规则：paths.workdir，没写（或 null）就是配置文件同目录 data/。"""
+    config = os.path.abspath(os.path.expanduser(
+        os.environ.get("BOSS_HUNT_CONFIG") or "~/.boss-hunt/config.json"))
+    try:
+        with open(config, encoding="utf-8") as f:
+            cfg = json.load(f)
+        workdir = (cfg.get("paths") or {}).get("workdir")
+        if isinstance(workdir, str) and workdir:
+            return os.path.abspath(os.path.expanduser(workdir))
+    except Exception:
+        pass
+    return os.path.join(os.path.dirname(config), "data")
+
+
+def _now(data):
+    """audit-01 R3：broadcasts.log 时间按 tick 输出里的配置时区写（原来用本机时区，本机 PST 差 16 小时）。"""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(data.get("timezone") or "Asia/Shanghai"))
+    except Exception:
+        return datetime.now()
+
+
 def main():
     raw = sys.stdin.read()
     start = raw.find("{")
     data = {}
+    # audit-01 R8：wrapper 带 --dry-run 时设 BOSS_TICK_DRY_RUN=1；tick 失败的 JSON 未必带 dry_run（甚至不是 JSON）
+    dry_env = os.environ.get("BOSS_TICK_DRY_RUN") == "1"
     if start < 0:
-        lines = ["⚠️ BOSS 投递跳：输出里没有 JSON", raw[-300:]]
+        lines = ["🧪 干跑：输出里没有 JSON" if dry_env else "⚠️ BOSS 投递跳：输出里没有 JSON", raw[-300:]]
     else:
         try:
-            data = json.loads(raw[start:])
+            data = json.JSONDecoder().raw_decode(raw[start:])[0]  # 后面跟着 stderr 文本也能读（audit-01 R4）
             if not isinstance(data, dict):
                 raise ValueError("json is not an object")
         except Exception:
             data = {}
-            lines = ["⚠️ BOSS 投递跳失败：输出无法解析", raw[-300:]]
+            lines = ["🧪 干跑：失败 输出无法解析" if dry_env else "⚠️ BOSS 投递跳失败：输出无法解析", raw[-300:]]
         else:
+            if dry_env:
+                data["dry_run"] = True
             try:
                 lines = render(data)
             except Exception as exc:  # 播报坏掉不能掩盖业务结果
@@ -163,12 +211,17 @@ def main():
     if lines:
         text = "\n".join(str(x) for x in lines)
         print(text)
+        if dry_env or data.get("dry_run"):
+            return 0  # 干跑不写 broadcasts.log（audit-01 R7）
         try:
-            path = os.path.expanduser(os.environ.get("BOSS_BROADCAST_LOG") or "~/.boss-hunt/data/broadcasts.log")
+            # audit-01 R6/R7：环境变量优先，其次 tick 输出里的 workdir，再按配置文件推导（tick 失败没输出 workdir 时）
+            workdir = data.get("workdir") if isinstance(data.get("workdir"), str) and data.get("workdir") else None
+            path = os.path.expanduser(os.environ.get("BOSS_BROADCAST_LOG")
+                                      or os.path.join(workdir or _config_workdir(), "broadcasts.log"))
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
             with open(path, "a", encoding="utf-8") as log:
                 log.write("[%s] window=%s\n%s\n---\n" % (
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"), data.get("window") or "?", text))
+                    _now(data).strftime("%Y-%m-%d %H:%M:%S"), data.get("window") or "?", text))
         except Exception as exc:
             print("播报落盘失败:%s" % exc, file=sys.stderr)
     return 0

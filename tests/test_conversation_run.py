@@ -531,9 +531,12 @@ console.log(JSON.stringify(eval(process.argv[1])));
             cfg['conversation'] = {key: value}
             errors, _ = hunt_schedule.validate_cfg(cfg)
             self.assertTrue(any('conversation.' + key in e for e in errors), (key, errors))
-        for value in [None, [], False, 'invalid']:
+        for value in [[], False, 'invalid']:
             cfg['conversation'] = value
             self.assertTrue(any('conversation' in e for e in hunt_schedule.validate_cfg(cfg)[0]))
+        # audit-01 B1（用户 11-06 决定）：null 视同没写，不再报错、不连带投递 tick 拒跑
+        cfg['conversation'] = None
+        self.assertFalse([e for e in hunt_schedule.validate_cfg(cfg)[0] if 'conversation' in e])
         cfg['conversation'] = {'enabled': False, 'dry': True, 'hours': [0, 21], 'templates': {}}
         self.assertFalse([e for e in hunt_schedule.validate_cfg(cfg)[0] if 'conversation' in e])
 
@@ -798,7 +801,7 @@ console.log(JSON.stringify(eval(process.argv[1])));
                     self.assertEqual(self.saved()['last_seen']['text'], text.strip())
 
     def test_row_reordering_uses_fresh_unique_index(self):
-        c = self.module()
+        self.module()
         first, second = self.item(age=1), self.item(2, age=2)
         rows = [{'conv_key': first['conv_key']}, {'conv_key': second['conv_key']}]
         result, opened, _, _, _ = self.run_hop([first, second], dry=True,
@@ -1103,12 +1106,13 @@ console.log(JSON.stringify(eval(process.argv[1])));
 
     def test_resume_sent_pattern_validation(self):
         cfg = json.loads((ROOT / 'assets/config.example.json').read_text())
-        for value in (None, 1, False, [], {}, '['):
+        # audit-01 R4：'' 原先算合法，但运行时按原样使用、匹配任何新气泡（简历回执假阳性），改为报错
+        for value in (None, 1, False, [], {}, '[', '', '  '):
             with self.subTest(value=value):
                 cfg['conversation']['resume_sent_pattern'] = value
                 errors, _ = hunt_schedule.validate_cfg(cfg)
                 self.assertTrue(any('conversation.resume_sent_pattern' in e for e in errors), errors)
-        for value in ('', '虚构简历.*已发送'):
+        for value in ('虚构简历.*已发送',):
             cfg['conversation']['resume_sent_pattern'] = value
             errors, _ = hunt_schedule.validate_cfg(cfg)
             self.assertFalse([e for e in errors if 'conversation.resume_sent_pattern' in e])

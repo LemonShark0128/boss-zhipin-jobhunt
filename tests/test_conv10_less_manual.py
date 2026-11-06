@@ -149,11 +149,10 @@ class DecideTests(unittest.TestCase):
 class SummaryCountTests(unittest.TestCase):
     def test_manual_count_only_recent(self):
         import test_conversation_run as T
-        from unittest.mock import patch
         case = T.ConversationRunTests('run_hop')
         case.setUp()
         try:
-            c = case.module()
+            case.module()
             old = S.new_record('id:old', 'reply', '', '虚构甲', '虚构HR', '', case.ts - 4 * 86400)
             old['status'] = 'manual'
             new = S.new_record('id:new', 'reply', '', '虚构乙', '虚构HR', '', case.ts - 3600)

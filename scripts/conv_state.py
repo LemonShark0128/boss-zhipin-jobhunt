@@ -27,7 +27,7 @@ def update_conv_state(prev, last_msg, now, cfg):
     coarse = last_msg.get('ts_precision_coarse', state.get('ts_precision_coarse', False))
     status = 'waiting_me' if side == 'them' else 'waiting_them'
     hours = max(0, (now - ts) / 3600) if side == 'me' else 0
-    threshold = float((cfg.get('inbox') or {}).get('stale_hours', 72))
+    threshold = (72.0 if (cfg.get('inbox') or {}).get('stale_hours') is None else float(cfg['inbox']['stale_hours']))
     if side == 'me' and hours >= threshold and not coarse:
         status = 'stale'
     if changed:

@@ -342,6 +342,6 @@ def parse_json_payload(text, default=None):
     return default
 
 
-def parse_network_json(text, max_scan=400000):
+def parse_network_json(text):
     """Bridge returns the raw body, possibly wrapped; grab the outermost JSON object."""
     return parse_json_payload(text, None)

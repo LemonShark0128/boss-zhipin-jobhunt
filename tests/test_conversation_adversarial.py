@@ -566,7 +566,6 @@ class NaturalReplyAdv(unittest.TestCase):
         self.assertNotIn('send_resume', [a['type'] for a in actions])
 
     def test_answer_without_punctuation_is_separated_from_question(self):
-        import re
         self.ctx['answer'] = lambda text: '做过五年示例行业BD'
         actions, _ = self.base.decide('有相关经验吗？')
         texts = self.base.texts(actions)

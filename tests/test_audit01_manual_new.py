@@ -134,5 +134,148 @@ class ManualNewMessageTests(unittest.TestCase):
         self.assertEqual(len(self.lines()), 1)
 
 
+class ConfiguredSystemPatternTests(ManualNewMessageTests):
+    """audit-01 R3：conversation.system_patterns 要在对话模块每一处都生效（原来只在推送文案一处）。"""
+
+    def test_configured_pattern_not_pushed_as_manual_new(self):
+        self.cfg['conversation']['system_patterns'] = ['虚构系统提示.{0,10}']
+        it = self.item(1, text='虚构系统提示：本岗位已更新', age=60)
+        self.hop([it], {it['conv_key']: self.manual(it)})
+        self.assertEqual(self.lines(), [])
+
+    def test_configured_pattern_not_pushed_as_out_of_view(self):
+        self.cfg['conversation']['system_patterns'] = ['虚构系统提示.{0,10}']
+        it = self.item(1, text='虚构系统提示：本岗位已更新', age=60)
+        c = self.module()
+        with patch.object(c.chat_dom, 'reveal_conversation', return_value={'ok': False, 'reason': 'not_found'}), \
+             patch.object(c.chat_dom, 'reset_list_scroll'):
+            self.run_hop(items=[it], row_snapshots=lambda *a: [])
+        self.assertFalse(any('📭' in l for l in self.out))
+
+    def test_send_guard_receives_configured_patterns(self):
+        import conv_actions as A
+        self.cfg['conversation']['system_patterns'] = ['虚构系统提示.{0,10}']
+        js = A.chat_dom.conv_parse.system_message_parser_js(
+            A.conv_parse.system_message_texts(self.cfg), A.conv_parse.system_patterns(self.cfg))
+        self.assertIn(__import__('json').dumps('虚构系统提示.{0,10}'), js)
+        seen = {}
+        def fake_click(br, tab, key, text, expected, *, system_texts=None, system_pats=None):
+            seen['pats'] = [p.pattern for p in system_pats or []]
+            return {'ok': False, 'reason': 'fiction_stop'}
+        before = {'conv_key': 'id:fiction', 'messages': [
+            {'id': 'a', 'who': 'friend', 'text': '虚构问题'},
+            {'id': 'b', 'who': 'unknown', 'text': '虚构系统提示：已更新'}]}
+        with patch.object(A.chat_dom, 'active_conversation', return_value=before), \
+             patch.object(A.CS, 'type_into_chat', return_value={'ok': True}), \
+             patch.object(A.chat_dom, 'atomic_chat_click', side_effect=fake_click), \
+             patch.object(A.SS, 'ledger_guard'):
+            reply = A.conv_rules.INTERVIEW_REPLY
+            cfg = dict(self.cfg, sending={'min_gap_seconds': 0},
+                       paths=dict(self.cfg['paths'], state=self.tmp.name + '/state.json'))
+            receipt = A.send_text(self.br, 1, cfg, 'id:fiction', {}, reply, reply)
+        self.assertNotEqual(receipt, 'send_aborted:owner_unknown')
+        self.assertEqual(seen.get('pats'), ['虚构系统提示.{0,10}'])
+
+
+class ManualNewExclusionTests(ManualNewMessageTests):
+    """audit-01 R4（测试缺口）：需人工·新消息的排除规则与 updated_ts 正向用例。"""
+
+    def ledger(self, **row):
+        import send_safety as SS
+        cfg = dict(self.cfg, paths=dict(self.cfg['paths'], state=self.tmp.name + '/state.json'))
+        SS.ledger_append(cfg, dict(dict(event_id='fiction-' + row.get('status', 'sent'), cmd='conv_text', job_id='',
+                                        text_sha256='0' * 64, ts='2026-10-29 11:00', ts_epoch=1), **row))
+
+    def test_own_ledger_text_not_pushed(self):
+        own = '方便说下这个岗位主要的工作要求和薪资结构吗，谢谢'
+        self.ledger(conv_key='id:fiction-other', text=own, status='sent')
+        it = self.item(1, text=own[:20], age=60)
+        self.hop([it], {it['conv_key']: self.manual(it)})
+        self.assertEqual(self.lines(), [])
+
+    def test_pending_conversation_not_pushed(self):
+        it = self.item(1, text=self.HR, age=60)
+        self.ledger(conv_key=it['conv_key'], text='虚构', status='unknown')
+        self.hop([it], {it['conv_key']: self.manual(it)})
+        self.assertEqual(self.lines(), [])
+
+    def test_blocked_brand_not_pushed(self):
+        self.cfg['filters'] = {'brand_block': ['虚构公司1']}
+        it = self.item(1, text=self.HR, age=60)
+        self.hop([it], {it['conv_key']: self.manual(it)})
+        self.assertEqual(self.lines(), [])
+
+    def test_override_record_newer_than_updated_ts_pushed(self):
+        it = self.item(1, text=self.HR, age=60)
+        row = self.manual(it)
+        row['last_seen'] = {'ts': None, 'text': ''}
+        row['updated_ts'] = self.ts - 3600
+        self.hop([it], {it['conv_key']: row})
+        self.assertEqual(len(self.lines()), 1)
+
+
+class MinGapDefaultRetryThresholdTests(unittest.TestCase):
+    """audit-01 R4（测试缺口）：缺省间隔改 60 后，对话跳遇 skip_min_gap(≤65) 重试一次、睡 N+1 秒；更长的不重试。"""
+    setUp = T.ConversationRunTests.setUp
+    module = T.ConversationRunTests.module
+    item = T.ConversationRunTests.item
+    history = T.ConversationRunTests.history
+    run_hop = T.ConversationRunTests.run_hop
+    saved = T.ConversationRunTests.saved
+
+    def hop_with_receipts(self, receipts):
+        from unittest.mock import Mock
+        c = self.module()
+        self.cfg.pop('sending', None)
+        self.cfg['_sleep'] = Mock()
+        with patch.object(c.conv_actions, 'send_resume', side_effect=receipts) as send:
+            execute = c._execute
+            def deliver(*args):
+                with patch.object(c.conv_actions, 'send_resume', send):
+                    return execute(*args)
+            with patch.object(c, '_execute', side_effect=deliver):
+                self.run_hop()
+        return send
+
+    def test_default_60_retries_once(self):
+        send = self.hop_with_receipts(['skip_min_gap(60)', 'sent'])
+        self.assertEqual(send.call_count, 2)
+        self.cfg['_sleep'].assert_called_once_with(61)
+
+    def test_longer_gap_not_retried(self):
+        send = self.hop_with_receipts(['skip_min_gap(70)'])
+        self.assertEqual(send.call_count, 1)
+        self.cfg['_sleep'].assert_not_called()
+
+
+class Round4GapTests(ManualNewMessageTests):
+    """audit-01 R5（测试缺口，第四轮变异未抓到的）：屏蔽公司推送与简历卡片判断也用配置的系统正则；对话跳流水损坏文案。"""
+
+    def test_blocked_brand_push_hides_configured_system_text(self):
+        self.cfg['conversation']['system_patterns'] = ['虚构系统提示.{0,10}']
+        self.cfg['filters'] = {'brand_block': ['虚构公司1']}
+        it = self.item(1, text='虚构系统提示：本岗位已更新', age=60)
+        self.hop([it], {})
+        line = next(l for l in self.out if l.startswith('🔒 屏蔽公司'))
+        self.assertNotIn('虚构系统提示', line)
+
+    def test_resume_card_resolved_by_configured_system_receipt(self):
+        c = self.module()
+        cfg = dict(self.cfg, conversation=dict(self.cfg['conversation'], system_patterns=['虚构回执提示.{0,20}'],
+                                               resume_sent_pattern='虚构回执提示'))
+        history = [{'who': 'friend', 'text': '我想要一份您的附件简历，您是否同意'},
+                   {'who': 'unknown', 'text': '虚构回执提示：已处理'}]
+        self.assertIsNone(c._resume_card(cfg, history))
+
+    def test_run_corrupt_ledger_text(self):
+        c = self.module()
+        out = []
+        with patch.object(c.SS, 'ledger_guard', side_effect=RuntimeError('skip_ledger_corrupt: 请先 ledger-repair --apply')):
+            result = c.run(self.cfg, self.br, out)
+        text = '\n'.join(result['notifications'])
+        self.assertIn('流水文件损坏', text)
+        self.assertNotIn('ledger-repair', text)
+
+
 if __name__ == '__main__':
     unittest.main()

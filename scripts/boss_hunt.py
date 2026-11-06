@@ -99,7 +99,7 @@ LEGACY_REPLY_SWITCHES = (("auto_reply", "enabled"), ("interview_auto_reply", Non
 
 
 def legacy_reply_warnings(cfg):
-    inbox_cfg = cfg.get("inbox") or {}
+    inbox_cfg = cfg.get("inbox") if isinstance(cfg.get("inbox"), dict) else {}
     warns = []
     for key, sub_key in LEGACY_REPLY_SWITCHES:
         value = inbox_cfg.get(key)
@@ -183,7 +183,7 @@ def snapshot_message_owner(it):
     return parse_message_owner(classes, info.get('showText'))
 
 
-def last_is_ours(cfg, row, it, greeting=""):
+def last_is_ours(cfg, row, it):
     return {'mine': True, 'friend': False}.get(snapshot_message_owner(it))
 
 
@@ -212,11 +212,10 @@ def _collect_rejects(cfg, st, items, jobs=None, now=None):
     before = json.dumps(rows, sort_keys=True, ensure_ascii=False)
     sent = st.get("sent") or {}
     greetings = {}
-    cache_path = os.path.join(cfg["paths"]["workdir"], "greet_cache.json")
-    if os.path.exists(cache_path):
-        with open(cache_path, encoding="utf-8") as f:
-            for key, row in json.load(f).items():
-                greetings.setdefault(key.split("|", 1)[0], []).append(row.get("text") or "")
+    # audit-01 R3：缓存坏了只是少一条比对依据，不让整跳收件箱崩
+    for key, row in G._cache_load(cfg).items():
+        if isinstance(row, dict):
+            greetings.setdefault(str(key).split("|", 1)[0], []).append(row.get("text") or "")
 
     def record(jid, it, kind):
         key = chat_dom.source_conversation_key(it)
@@ -271,7 +270,7 @@ def _collect_rejects(cfg, st, items, jobs=None, now=None):
             applications = [v for v in sent.values() if v.get("brand") == row["brand"]]
             if len(same) == len(applications) == 1:
                 it = same[0]
-        if it and any(last_is_ours(cfg, row, it, text) for text in greetings.get(jid, [""])):
+        if it and last_is_ours(cfg, row, it):
             record(jid, it, "no_reply")
     if json.dumps(rows, sort_keys=True, ensure_ascii=False) != before:
         save_rejects(cfg, rows)
@@ -345,6 +344,8 @@ def cmd_unanswered(args):
         st = {}
     if not isinstance(st, dict) or not isinstance(st.get('conv_state', {}), dict):
         raise ValueError('invalid conv_state')
+    if args.hours is None:  # audit-01 R3：默认跟 inbox.stale_hours（收件箱播报同一口径），没写才 72
+        args.hours = HC.stale_hours(cfg)
     data = unanswered_report(st, hours=args.hours, limit=args.limit)
     if args.unknown:
         data['items'] = {'unknown': data['items']['unknown']}
@@ -563,6 +564,13 @@ def cmd_rejects(args):
     return 0
 
 
+PENDING_SCOPE_TEXT = {
+    "conv": "⚠️ 有对话发送待核对（只停那个会话，投递照常）",
+    "outbound": "⚠️ 有投递发送待核对（投递暂停，先确认那个 HR 有没有收到消息）",
+    "corrupt": "⚠️ 发送流水文件损坏（投递和对话暂停，需要先修复流水）",
+}
+
+
 def chat_interview_replied_keys(cfg):
     """audit-01 Q2：对话模块已发过面试固定话术的会话键（读 conversations.json，只读）。"""
     import conv_rules
@@ -570,19 +578,33 @@ def chat_interview_replied_keys(cfg):
     path = os.path.join(cfg["paths"]["workdir"], "conversations.json")
     if not os.path.exists(path):
         return set()
-    reply = (cfg.get("user") or {}).get("interview_reply") or conv_rules.INTERVIEW_REPLY
-    return {key for key, row in conv_store.load(path).items()
-            if isinstance(row, dict) and reply in (row.get("sent_templates") or [])}
+    try:
+        records = conv_store.load(path)
+    except (OSError, ValueError):
+        return set()  # audit-01 R4：文件坏了只是少清几条「待你确认」，收件箱照常只读
+    # 自定义与默认话术都认（改过 interview_reply 之前用默认话术回过的也算）
+    replies = {conv_rules.INTERVIEW_REPLY, (cfg.get("user") or {}).get("interview_reply") or conv_rules.INTERVIEW_REPLY}
+    return {key for key, row in records.items()
+            if isinstance(row, dict) and replies & set(row.get("sent_templates") or [])}
 
 
 def inbox(cfg, br, tab, st, out):
     # audit-01 Q3：inbox 只读不发，有待核对的发送只提示、照常读（投递/对话的闸门不变）
-    pending_verification = None
+    pending_verification, pending_scope = None, None
     try:
         ledger_guard(cfg)
     except RuntimeError as exc:
         pending_verification = str(exc)
-        out.append("⚠️ 有待核对的发送（投递/对话会暂停，先确认那个 HR 有没有收到消息）；收件箱照常只读")
+        # audit-01 R4：分清三种情形再说人话——对话挂起只停那个会话，投递挂起停投递，流水损坏全停
+        if pending_verification.startswith("skip_ledger_corrupt"):
+            pending_scope = "corrupt"
+        else:
+            try:
+                ledger_guard(cfg, scope="outbound")
+                pending_scope = "conv"
+            except RuntimeError:
+                pending_scope = "outbound"
+        out.append(PENDING_SCOPE_TEXT[pending_scope] + "；收件箱照常只读")
     nav = br.nav(tab, "https://www.zhipin.com/web/geek/chat", wait=5)
     if cfg.get("_deadline") and nav and nav.get("isError"):
         raise RuntimeError("inbox_navigation_failed")
@@ -637,14 +659,15 @@ def inbox(cfg, br, tab, st, out):
     if status_scan['failed'] or status_scan['skipped_failures']:
         out.append('会话状态检查 %d ｜失败 %d ｜连续失败跳过 %d' % (status_scan['checked'], status_scan['failed'], status_scan['skipped_failures']))
     HS.save_state(cfg, st)
-    report = unanswered_report(st, hours=float((cfg.get('inbox') or {}).get('stale_hours', 72)))
+    report = unanswered_report(st, hours=HC.stale_hours(cfg))
     if status_scan['deadline']:
         counts = report['counts']
         if any(counts.values()):
             out.append('待我回 %d ｜等对方 %d ｜超时 ≥%gh %d（详见 unanswered）' % (
-                counts['waiting_me'], counts['waiting_them'], float((cfg.get('inbox') or {}).get('stale_hours', 72)), counts['stale']))
+                counts['waiting_me'], counts['waiting_them'], HC.stale_hours(cfg), counts['stale']))
         return dict(status_scan=status_scan, unanswered=report, messages_total=len(items),
-                    pending_verification=bool(pending_verification), pending_error=pending_verification)
+                    pending_verification=bool(pending_verification), pending_error=pending_verification,
+                    pending_scope=pending_scope)
     lookback = float((cfg.get("inbox") or {}).get("lookback_hours", 72))
     max_listed = int((cfg.get("inbox") or {}).get("max_listed", 5))
     now_ms = int(time.time() * 1000)
@@ -720,14 +743,14 @@ def inbox(cfg, br, tab, st, out):
         if len(interest) > max_listed:
             out.append("  · …另有 %d 个" % (len(interest) - max_listed))
 
-    report = unanswered_report(st, hours=float((cfg.get('inbox') or {}).get('stale_hours', 72)))
+    report = unanswered_report(st, hours=HC.stale_hours(cfg))
     counts = report['counts']
     if any(counts.values()):
         out.append('待我回 %d ｜等对方 %d ｜超时 ≥%gh %d（详见 unanswered）' % (
-            counts['waiting_me'], counts['waiting_them'], float((cfg.get('inbox') or {}).get('stale_hours', 72)), counts['stale']))
+            counts['waiting_me'], counts['waiting_them'], HC.stale_hours(cfg), counts['stale']))
     return {
         "pending_verification": bool(pending_verification),
-        "pending_error": pending_verification,
+        "pending_error": pending_verification, "pending_scope": pending_scope,
         "status_scan": status_scan,
         "unanswered": report, "owner_unknown": owner_unknown,
         "window_hours": int(lookback),
@@ -845,13 +868,16 @@ def cmd_validate(args):
                 warns.append("零产出关键词「%s」：已判数=%d，no_jd=%d，final_A+final_B+sent+b_pool=0（仅回放已有 JD）"
                              % (kw, judged, no_jd))
     if want_json(args):
-        cap = (cfg.get("sending") or {}).get("daily_cap")
+        # audit-01 R6：段形状不对时输出阶段也不能崩
+        sending = cfg.get("sending") if isinstance(cfg.get("sending"), dict) else {}
+        targets = cfg.get("targets") if isinstance(cfg.get("targets"), list) else []
+        cap = sending.get("daily_cap")
         emit_json({"cmd": "validate", "ok": not errs, "config": path,
                    "workdir": cfg["paths"]["workdir"], "errors": errs, "warnings": warns,
                    "targets": [{"name": t.get("name"), "city": t.get("city"),
                                 "city_code": t.get("city_code"),
                                 "keywords": t.get("keywords") or []}
-                               for t in (cfg.get("targets") or []) if t.get("enabled", True)],
+                               for t in targets if isinstance(t, dict) and t.get("enabled", True)],
                    "daily_cap": cap, "timezone": HC.cfg_tz(cfg).key})
         return 1 if errs else 0
     print("配置：%s" % path)
@@ -1522,6 +1548,24 @@ def run_tick(cfg, st, now, out):
 
 def cmd_tick(args):
     cfg = HC.load_config(HC.config_path(args), create_dirs=not args.dry_run)
+    # audit-01 R5/R6：干跑与真跳都一进来就校验，配置坏了不先算计划/预算再崩成看不懂的报错
+    early_errs, _ = HQ.validate_cfg(cfg)
+    if early_errs:
+        data = {"cmd": "tick", "ok": False, "errors": early_errs, "workdir": cfg["paths"]["workdir"]}
+        if args.dry_run:
+            data["dry_run"] = True
+            if want_json(args):
+                emit_json(data)  # 干跑不写日志
+            else:
+                for err in early_errs:
+                    print("❌ " + err)
+        else:
+            lines = ["配置有误，本跳不跑"] + early_errs
+            if want_json(args):
+                emit_json(data, cfg, lines)
+            else:
+                emit(cfg, lines)
+        return 1
     now = HC.now_local(cfg)
     plan = HQ.tick_plan(cfg, now)
     out = ["这跳做 %s（%s %s）" % ("/".join(plan["actions"]) or "不在窗口，跳过", plan["now"], plan["timezone"])]
@@ -1540,12 +1584,8 @@ def cmd_tick(args):
             print(out[0])
             print("本跳预算 %d；各级配额 %s" % (budget, json.dumps(quotas, ensure_ascii=False)))
         return 0
-    errs, warns = HQ.validate_cfg(cfg)
-    if errs:
-        data = dict(plan, cmd="tick", ok=False, errors=errs)
-        out.extend(errs)
-    else:
-        data = run_tick(cfg, {}, now, out)
+    data = run_tick(cfg, {}, now, out)
+    data.setdefault("workdir", cfg["paths"]["workdir"])  # audit-01 R6：播报脚本据此决定 broadcasts.log 放哪
     if want_json(args):
         emit_json(data, cfg, out)
     else:
@@ -1586,6 +1626,51 @@ def cmd_send(args):
     return 0
 
 
+def cmd_hop_dry_run(args):
+    """chat / inbox 的离线校准（onboard-01）：只校验配置、说明真跳会做什么。
+    不连浏览器、不拿锁、不读写 state / 对话存档 / 日志；与 tick --dry-run 同一口径。"""
+    path = HC.config_path(args)
+    cfg = HC.load_config(path, create_dirs=False)
+    errs, warns = HQ.validate_cfg(cfg)
+    data = {"cmd": args.cmd, "ok": not errs, "dry_run": True, "config": path,
+            "workdir": cfg["paths"]["workdir"], "errors": errs, "warnings": warns,
+            "would_connect": False, "timezone": HC.cfg_tz(cfg).key, "now": HC.stamp(cfg)}
+    if errs:
+        data["message"] = "🧪 干跑：配置有误，真跳不会跑（%s）" % "；".join(errs)
+    elif args.cmd == "chat":
+        options = cfg.get("conversation") or {}
+        hour = HC.now_local(cfg).hour
+        hours = options.get("hours", list(range(9, 22)))
+        if not options.get("enabled", False):
+            data["message"] = "🧪 对话跳干跑：conversation.enabled=false，真跳会直接跳过（不连浏览器）"
+        elif hour not in hours:
+            data["message"] = "🧪 对话跳干跑：现在 %d 点不在 conversation.hours，真跳会跳过" % hour
+        else:
+            data["would_connect"] = True
+            data["message"] = ("🧪 对话跳干跑：真跳会连浏览器处理最多 %s 个会话（日上限 %s）%s；本次未连浏览器"
+                               % (options.get("per_hop", 8), options.get("daily_cap", 20),
+                                  "，conversation.dry=true 只出计划不发" if options.get("dry") else ""))
+    else:
+        data["would_connect"] = True
+        data["message"] = ("🧪 回消息跳干跑：真跳会打开消息页只读归类近 %s 小时消息（不发消息）；本次未连浏览器"
+                           % ((cfg.get("inbox") or {}).get("lookback_hours") or 72))
+    if want_json(args):
+        emit_json(data)
+    else:
+        print(data["message"])
+        for w in warns:
+            print("⚠️  " + w)
+    return 0 if data["ok"] else 1
+
+
+def cmd_chat_entry(args):
+    return cmd_hop_dry_run(args) if args.dry_run else cmd_chat(args)
+
+
+def cmd_inbox_entry(args):
+    return cmd_hop_dry_run(args) if args.dry_run else cmd_inbox(args)
+
+
 @locked_command
 def cmd_chat(args):
     import conversation
@@ -1593,16 +1678,16 @@ def cmd_chat(args):
     out = []
     br = CM.Browser(cfg)
     try:
+        # audit-01 Q5/R4：先校验对话相关配置（conversation 段与正则）再用其中的 hours，有错不连浏览器
+        errs = HQ.conversation_errors(cfg)
+        if errs:
+            raise RuntimeError('config_invalid: ' + '；'.join(errs))
         # Disabled/out-of-hours hops still use run's guards without connecting.
         options = cfg.get('conversation') or {}
         if (not options.get('enabled', False) or
                 HC.now_local(cfg).hour not in options.get('hours', list(range(9, 22)))):
             data = conversation.run(cfg, br, out, dry=args.dry)
         else:
-            # audit-01 Q5：对话跳也先校验对话相关配置（conversation 段与正则），有错不连浏览器
-            errs = HQ.conversation_errors(cfg)
-            if errs:
-                raise RuntimeError('config_invalid: ' + '；'.join(errs))
             br.connect()
             _, login = O.check_login(br, cfg)
             if login.get('login') or not login.get('avatar'):
@@ -1669,7 +1754,10 @@ def cmd_run(args):
         cs = HS.candidates(cfg)
         out.append("候选 %d（A%d/B%d）" % (len(cs), sum(1 for x in cs if x["grade"].rstrip("?") == "A"),
                                          sum(1 for x in cs if x["grade"].rstrip("?") == "B")))
-        per = args.send if args.send is not None else (None if (cfg.get("sending") or {}).get("carry_over") else int(
+        sending = cfg.get("sending") or {}
+        # audit-01 R3：carry_over 缺省与 send_budget 一致（有 grade_quota 时默认顺延），否则会静默发 0 条
+        carry = sending.get("carry_over", "grade_quota" in sending)
+        per = args.send if args.send is not None else (None if carry else int(
             (cfg.get("schedule") or {}).get("per_window") or 0))
         if per is None or per:
             tab = br.new_tab("https://www.zhipin.com/web/geek/jobs?city=%s"
@@ -1846,7 +1934,7 @@ def build_parser():
     p.set_defaults(func=cmd_summary)
 
     p = sub.add_parser('unanswered', help='离线查看谁在等谁（不打开浏览器）')
-    p.add_argument('--hours', type=float, default=72)
+    p.add_argument('--hours', type=float, default=None, help='超时阈值（小时），默认 inbox.stale_hours，未写则 72')
     p.add_argument('--limit', type=int, default=5)
     p.add_argument('--unknown', action='store_true', help='只列归属待核对会话')
     add_json_flag(p)
@@ -1887,13 +1975,15 @@ def build_parser():
     p.set_defaults(func=cmd_send)
 
     p = sub.add_parser('chat', help='按轮次处理 HR 对话')
-    p.add_argument('--dry', action='store_true', help='只列出计划动作，不发送、不写对话存档')
+    p.add_argument('--dry', action='store_true', help='预演：会连浏览器打开会话（清未读），只列计划动作，不发送、不写对话存档')
+    p.add_argument('--dry-run', action='store_true', help='离线校准：只校验配置、说明真跳会做什么，不开浏览器')
     add_json_flag(p)
-    p.set_defaults(func=cmd_chat)
+    p.set_defaults(func=cmd_chat_entry)
 
     p = sub.add_parser("inbox", help="盯收件箱")
+    p.add_argument("--dry-run", action="store_true", help="离线校准：只校验配置、说明真跳会做什么，不开浏览器")
     add_json_flag(p)
-    p.set_defaults(func=cmd_inbox)
+    p.set_defaults(func=cmd_inbox_entry)
 
     p = sub.add_parser("run", help="扫描 + 发送 + 收件箱")
     p.add_argument("--send", type=int, help="本轮发送数（默认用 schedule.per_window）")
@@ -1904,6 +1994,13 @@ def build_parser():
     return ap
 
 
+def _mark_dry_run(args, data):
+    """audit-01 R8 / onboard-01：tick / chat / inbox --dry-run 在读配置等处失败时，兜底 JSON 也带 dry_run，播报才不会当成真跳失败记日志。"""
+    if args.cmd in ("tick", "chat", "inbox") and getattr(args, "dry_run", False):
+        data["dry_run"] = True
+    return data
+
+
 def main():
     ap = build_parser()
     args = ap.parse_args()
@@ -1911,14 +2008,25 @@ def main():
         ap.print_help()
         return 2
     path = HC.config_path(args)
-    if args.cmd != "init" and not os.path.exists(path):
+    if args.cmd != "init" and not os.path.isfile(path):  # audit-01 R4：路径是目录也算找不到
         # audit-01 #14：原先直接抛 FileNotFoundError 堆栈，--json 也不出 JSON
         if want_json(args):
-            emit_json({"cmd": args.cmd, "ok": False, "error": "config_not_found", "config": path})
+            emit_json(_mark_dry_run(args, {"cmd": args.cmd, "ok": False, "error": "config_not_found", "config": path}))
         else:
             print("配置文件不存在：%s（先跑 `boss_hunt.py init`，或用 --config 指定）" % path, file=sys.stderr)
         return 1
-    return args.func(args)
+    try:
+        return args.func(args)
+    except Exception as exc:  # audit-01 R5：类型错误等也要在 --json 下只出一个 JSON
+        # audit-01 R4：--json 时任何命令出错都只输出一个 JSON 对象（配置损坏、连桥失败等），退出码 1
+        if want_json(args):
+            emit_json(_mark_dry_run(args, {"cmd": args.cmd, "ok": False, "error": str(exc) or type(exc).__name__}))
+        elif isinstance(exc, (OSError, ValueError, RuntimeError)):
+            print("%s：%s" % (type(exc).__name__, exc), file=sys.stderr)
+        else:
+            import traceback
+            traceback.print_exc()  # audit-01 R6：非预期异常多半是代码 bug，文本模式保留堆栈方便排查
+        return 1
 
 
 if __name__ == "__main__":

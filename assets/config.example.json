@@ -132,12 +132,7 @@
   },
   "inbox": {
     "lookback_hours": 72,
-    "max_listed": 5,
-    "patterns": {
-      "reject": "不合适|不匹配|不符合|已招满|招满了|暂不考虑|不太适合|有更合适的人选|已招到",
-      "interview": "面试|面谈|复试|初试|约个?时间|什么时候方便|线上|线下|面试官",
-      "interested": "感兴趣|有兴趣|简历|方便沟通|聊聊|沟通一下|想了解|加个微信|加微信"
-    }
+    "max_listed": 5
   },
   "schedule": {
     "timezone": "Asia/Shanghai",
@@ -164,7 +159,7 @@
     ],
     "summary_window": "22:00",
     "scan_pages": 2,
-    "_tip": "cron 可每 10 分钟调用一次 tick；同一天同窗口成功后跳过重复执行。carry_over=false 使用固定 per_window 总上限。"
+    "_tip": "cron 挂在 windows 整点调用 tick（开了对话模块别用每 10 分钟，会和 :30 对话跳抢锁）；同一天同窗口成功后跳过重复执行。carry_over=false 使用固定 per_window 总上限。"
   },
   "transport": {
     "kind": "huashu",

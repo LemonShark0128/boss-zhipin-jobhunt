@@ -1,7 +1,6 @@
 """Conversation browser and model pieces, using fictional data and substitutes."""
 import ast
 from itertools import chain, repeat
-import hashlib
 import json
 import sys
 import subprocess

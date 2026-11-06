@@ -141,6 +141,7 @@ python3 scripts/boss_hunt.py send 2              # 首跑验证链路用 2：sen
 | chat | 面试类只出现「线上 + 约时段」的话术，不出现答应线下到场 |
 | grade / grades | JD 样本等级与信号可解释；粗标统计与 raw 一致，全程离线 |
 | tick --dry-run | 窗口动作正确，不开浏览器、不发送、不记账 |
+| 三条 wrapper `--dry-run` | 都以 🧪 开头、退出码 0；chat 写明真跳会不会连浏览器；都不开浏览器、不写 state |
 | rejects | kind / attribution / reason / grade / target 分组与样本一致 |
 | summary | sent / by_grade / rejects / no_reply / pending 与本地记录一致 |
 | 收尾 | `已关自己开的标签页 N 个`；用户自己的页面没动 |
@@ -180,12 +181,15 @@ python3 scripts/boss_hunt.py send 2              # 首跑验证链路用 2：sen
 新配置推荐单入口 `tick`，由脚本按配置时区分派动作，先用 `tick --dry-run` 校准：
 
 ```bash
-# wrapper 用 flock 文件锁（写法见仓库 `scripts/cron/boss-hunt-chat.sh`），不要自己 mkdir data/.lock：
-# 那会把 python 的 flock 文件改成目录，每跳窗口内 tick 全灭（2026-10-28 实测）。
-# 播报由 `boss-hunt-tick-fmt.py` / `boss-hunt-inbox-fmt.py` 渲染，格式坏了不会吞掉业务退出码。
-#!/bin/bash
-caffeinate -i /usr/bin/python3 <skill>/scripts/boss_hunt.py tick --json
-# cron: */10 * * * *；tick 自己检查 schedule.timezone 和窗口。
+# 用仓库 wrapper（三条共用 <workdir>/.wrapperlock 文件锁；上一跳没跑完这一跳静默跳过；保留业务退出码；
+# macOS 自动加 caffeinate；stdout 是可直接推送的人话）。cron 写法见 docs/agent-adapters.md 第 3 节：
+bash <skill>/scripts/cron/boss-hunt-tick.sh --dry-run   # 先干跑校准（参数会转给 tick，不开浏览器、不发送）
+bash <skill>/scripts/cron/boss-hunt-chat.sh --dry-run   # 对话跳离线校准：开没开、在不在时段（不同于会连浏览器的 chat --dry）
+bash <skill>/scripts/cron/boss-hunt-inbox.sh --dry-run  # 回消息跳离线校准：配置能不能过、真跳读哪段消息
+# cron: 投递跳 scripts/cron/boss-hunt-tick.sh 挂在 windows 整点（如 0 8,10,12,…）；
+#       对话跳 scripts/cron/boss-hunt-chat.sh 挂 :30；回消息跳 scripts/cron/boss-hunt-inbox.sh 可选。
+# 别用 */10 跑投递跳（会和 :30 对话跳抢锁）；也别自己 mkdir data/.lock——那会把 Python 的 flock 文件
+# 变成目录，每跳窗口内 tick 全灭（2026-10-28 实测）。
 ```
 
 **每个窗口都要投递**；`scan_windows` 在投递前补池（默认 3 个），`inbox_windows` 在投递后再收件箱，
@@ -362,6 +366,9 @@ caffeinate -i /usr/bin/python3 <skill>/scripts/boss_hunt.py tick --json
 {"provider":"deepseek","base_url":"https://api.deepseek.com/v1","model":"deepseek-chat",
  "api_key_env":"DEEPSEEK_API_KEY","num_predict":400,"timeout_s":45}
 ```
+（2026-11-06 补：DeepSeek 官方文档首页现列 `deepseek-flash` / `deepseek-v4-pro`，`deepseek-chat` 与 `/v1` 后缀没写、是否仍可用未核实；
+Kimi / MiniMax 等 OpenAI 兼容服务写 `"provider":"openai"` + 自己的 `base_url` / `api_key_env`，可直接粘贴的三段配置与核实标注见
+`docs/agent-adapters.md` 第 7 节。`provider` 写成厂商名会被 `validate` 拦下。）
 `greet.py` 已支持两种后端：`provider=ollama`（默认，走 `/api/generate`）或 `deepseek/openai/cloud`（走 `/chat/completions` + Bearer key，key 依次从环境变量、`llm.env_file` / `$BOSS_HUNT_ENV_FILE`、`~/.boss-hunt/.env`、`~/.hermes/.env`（Hermes 兼容）读，不回显）。实测 DeepSeek 1.1–1.5 秒/条、3/3 过闸门、字数 140–163（本地 9b 是 4–15 秒、4/4 还是 165–190）。切完用 `ollama stop <model>` 卸模型降温。
 
 **口语化 + 压短（2026-10-24 实测）：** 用户嫌 AI 味重后加的两条约束——骨架①改「这行我做了 {years} 年」（不写死「某某行业这行」，否则投售前/SaaS 岗会错位）；RULES 里加「多用短句、少用四字词与书面连词、允许『这行/干了/跑了』」。
@@ -414,10 +421,9 @@ caffeinate -i /usr/bin/python3 <skill>/scripts/boss_hunt.py tick --json
 
 **用户说「不要全是某个方向」时，光调排序分不够 —— 要加每轮硬名额。** 池子本身偏向那个方向时
 （关键词、组合加分、历史投递三件事互相强化），排序怎么调，头部还是那个方向。做配平要用三件套：
-城市加权（`scoring.city_bonus`）+ 本地方向加分（`scoring.blob_bonus`）+ **每轮硬名额**
-（`sending.overseas_regex` / `sending.overseas_max_per_round`，`do_send` 里按标题匹配计数，
-满额后同方向岗位直接跳过、记 `skip_overseas_quota`，且**不写 contacts**，下一轮仍可投）。
-只加名额不加权，名单会变成「凑数的低分岗」；只加权不加名额，一轮 10 个里仍可能 8 个同向。
+城市加权（`scoring.city_bonus`）+ 本地方向加分（`scoring.blob_bonus`）+ A/B 分级配额（`sending.grade_quota`）。
+（历史：曾有每轮硬名额 `sending.overseas_regex` / `overseas_max_per_round` / `skip_overseas_quota`，
+已于 2026-10-27 随「移除海外配额」删掉；配置里写了不会报错，但**完全不生效**。）
 改完用替身跑一轮 `do_send` 数配比（`B.send_one = lambda *a, **k: "sent"`），别靠肉眼看 `plan --top 20`。
 
 ## A/B 分级与投递顺序（Phase A）
@@ -551,7 +557,7 @@ python3 scripts/boss_hunt.py scan  [--target 名称] [--keyword 词] [--pages 3]
 python3 scripts/boss_hunt.py plan  [--top 20]          # 只报告，不发
 python3 scripts/boss_hunt.py send  N                   # 真发
 python3 scripts/boss_hunt.py inbox                     # 盯消息 + 分类（只读；回 HR 走 chat）
-python3 scripts/boss_hunt.py unanswered [--hours 72] [--limit 20] [--json]  # 离线：谁在等谁（不开浏览器）
+python3 scripts/boss_hunt.py unanswered [--hours N] [--limit 20] [--json]  # 离线：谁在等谁（不开浏览器；N 默认 inbox.stale_hours，未写为 72）
 python3 scripts/boss_hunt.py run   [--send N] [--inbox]   # 手动一键，定时任务用 tick
 python3 scripts/boss_hunt.py grade --jd-file jd.txt [--job-name 职位] [--brand 公司] [--industry 行业]
 python3 scripts/boss_hunt.py grades [--top 20] [--json]
@@ -604,7 +610,6 @@ python3 scripts/dump_conversations.py [-o conv.json]   # 只读导出会话列�
 | `sending.daily_cap` / `min_gap_seconds` | 日上限 / 间隔 | 20–30 / ≥60s；带多轮对话时 90s |
 | `sending.max_inspect_per_window` | 单跳最多打开几个详情页读 JD | 默认 24；调小更省请求，但额度可能发不满 |
 | `sending.hidden_b_probe` | A 额度满后，还允许读几个粗标 A? 的 JD（捞「自报互联网、实则门店」的隐藏 B） | 默认 6；行业字段不准就调大 |
-| `sending.overseas_regex` / `overseas_max_per_round` | 某个方向每轮最多几个（按 `jobName` 正则计数） | 混投时用；被跳过的岗位不写 contacts，下轮可投 |
 | `scoring.city_bonus` | 按 `cityName` 给本地岗加分，如 `{"示例城市": 2}` | 只影响同档排序；旧配置仍需明显小于 a_min |
 | `scoring.blob_bonus` | 单边加分：命中任一 term 就加（`[{terms:[...],score:3}]`） | 门店类、城市经理类各一条 |
 | `sending.verify_text` | 发送校验文本 | 默认取招呼语开头 8 字；`mode=llm` 时忽略，改用实际话术开头 |
@@ -745,7 +750,7 @@ python3 scripts/dump_conversations.py [-o conv.json]   # 只读导出会话列�
 - 报 `inbox` 结果必须分清「读到了」和「回了」：`inbox` 只读不发（2026-11-06 cleanup-02 起），回 HR 只走对话模块
   `chat`（:30 跳：问两轮、发简历、面试固定回复、回绝）。汇报时把「已自动回 N」「需你人工回 M（列品牌）」和「为什么不自动回」
   写在一起 —— 只报「近 72 小时新消息 155 条」，他会以为脚本坏了。
-- **「收到好多招呼」和「我们发了多少」是两件事**：`inbox` 里的「新招呼 N 条」是 HR 主动发来的，
+- **「收到好多招呼」和「我们发了多少」是两件事**：`inbox` 概览里的「新消息 N 条」是近 72 小时对方发来的、括号里的「列表 N」是会话列表总数，
   我们投出去的量只看 `state.sent` 里当天的记录。用户问「上一轮是不是发了好多招呼」时，先把这两个数
   分开说，别拿收到的招呼数当投递量报给他。
 - 用户问「上一轮发了多少 / 出了什么问题」时，按 `references/round-audit.md` 取证后再答：
@@ -907,9 +912,10 @@ codex 施工若写明「发送路径不动」，这一处要自己补并补一�
 
 1. **配置搬事实**：用户资料、城市与城市码、关键词、模板、每日上限 —— 手工搬进新 `config.json`，
    别整体复制，旧版字段名可能不同。
-2. **状态必须交接受保护字段**：`sent`、`contacts`、`replied`、`inbox_seen` 要一起搬，
+2. **状态必须交接受保护字段**：`state.json` 的 `sent`、`contacts`、`replied`、`inbox_seen` 要一起搬，
    否则会给同一批 HR 重发招呼、同一批面试消息重复处理；`day` / `day_count` 也搬，
-   否则当天额度凭空重置，会多投一轮。
+   否则当天额度凭空重置，会多投一轮。**发送流水 `send_ledger.jsonl` 与对话记录 `conversations.json` 整份搬**：
+   前者是防重发与额度的权威记录，后者记着每个 HR 问到第几轮、简历发没发、谁转了人工，丢了会重问、重发简历。
 3. **不要搬的**：`raw/` 只作历史快照（可以留着看，不参与筛选）、旧日志格式、旧代码目录。
 4. 搬完按顺序验：`validate` → `template`（核对渲染出的招呼语）→ `plan`（候选数是否合理）
    → 跑**真实入口**（wrapper/定时脚本，而不是直接 `python3 脚本 run`）一次。

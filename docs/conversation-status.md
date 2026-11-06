@@ -28,5 +28,5 @@ python3 scripts/boss_hunt.py unanswered --hours 72 --limit 20 --json
 - 招呼语、缓存和模板共用候选人事实来源。数字分句采用保守的受控短句匹配，完整保留指标和团队等主体，不从岗位薪资借数字。事实短句改写可能回退模板；模板也不合规则不发送。
 - 历史销售额可引用 facts；面试、到岗、薪资承诺，以及出差、驻外、外派、异地等个人意愿转人工。
 - 点击首次沟通前必须明确读取到平台招呼语关闭；开启、空结果、缺少布尔状态均中止，不自动调整设置。
-- （历史）`inbox.auto_reply.daily_cap` 曾是 auto_reply、interview_reply、followup 共用的流水额度；这三条发送路径已于 cleanup-02 移除，`send_safety` 里的额度分支暂未清理。
+- （历史）`inbox.auto_reply.daily_cap` 曾是 auto_reply、interview_reply、followup 共用的流水额度；这三条发送路径已于 cleanup-02 移除，`send_safety` 里的额度分支也已在 audit-01 清理。
 - RPC 顶层 error 抛出包含错误码和消息的异常。关闭标签只累计确认成功项；失败保留 ID、抛出明确错误，客户端仍执行关闭。连接、导出和业务异常均进入清理。

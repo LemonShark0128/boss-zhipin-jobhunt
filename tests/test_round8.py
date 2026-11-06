@@ -6,7 +6,6 @@
 只有 document.execCommand('insertText') 会生成浏览器原生 beforeinput/input，
 框架模型才会更新。所有账本数据都在临时目录。
 """
-import hashlib
 import json
 import subprocess
 import sys

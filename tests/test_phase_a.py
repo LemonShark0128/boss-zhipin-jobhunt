@@ -219,7 +219,7 @@ class SummaryTests(Base):
         items=[{'encryptJobId':'interview','brandName':'示例公司','lastMessageInfo':{'showText':'请给几个面试时间','msgTime':int(now.timestamp()*1000),'fromSelf':False}}]
         browser=unittest.mock.Mock()
         browser.network.return_value={'text':json.dumps({'code':0,'zpData':{'result':items}})}
-        result=B.inbox(self.cfg,browser,1,st,[])
+        B.inbox(self.cfg,browser,1,st,[])
         self.assertIn('interview',st['pending'])
         HS.save_state(self.cfg,st)
         self.assertEqual(B.daily_summary(self.cfg,HS.load_state(self.cfg))['pending'],1)

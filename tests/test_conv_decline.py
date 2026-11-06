@@ -1,5 +1,4 @@
 """conv-03n regression contracts, using only fictional data and offline doubles."""
-import copy
 import json
 import subprocess
 import unittest
@@ -51,7 +50,7 @@ class DeclineRunTests(unittest.TestCase):
                 self.br.new_tab.side_effect = [10, 11]
                 self.cfg['conversation']['decline_industries'] = ['金融']
                 item = dict(self.item(), brandIndustry='互联网金融')
-                c = self.module()
+                self.module()
                 with patch.object(A, 'mark_not_interested_company', return_value='done', create=True) as mark:
                     result, _, calls, _, _ = self.run_hop(items=[item], history=self.history(inbound=inbound))
                     self.assertEqual([a[0] for a in calls], ['text'])
