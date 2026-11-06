@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-06
+
+### 修复
+- `init` 生成的示例配置日上限改为 20（`grade_quota` A15 / B5，合计等于 `daily_cap`），与 README「默认 15–20/天」一致；
+  新用户第一次 `validate` 不再报「daily_cap 偏高」。README、SKILL、访谈清单里的配额示例同步。
+
 ## [0.4.0] - 2026-11-06
 
 ### 新增 · 上手与换 Agent

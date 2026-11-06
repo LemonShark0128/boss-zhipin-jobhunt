@@ -607,14 +607,14 @@ python3 scripts/dump_conversations.py [-o conv.json]   # 只读导出会话列�
 | `filters.exclude_headhunter` / `exclude_proxy` | 排掉猎头、代招 | 默认开 |
 | `filters.experience` | `job_min_years_max` / `job_max_years_min` | 排掉够不到和太初级 |
 | `filters.districts_allow` | 通勤圈 | 空 = 不限 |
-| `sending.daily_cap` / `min_gap_seconds` | 日上限 / 间隔 | 20–30 / ≥60s；带多轮对话时 90s |
+| `sending.daily_cap` / `min_gap_seconds` | 日上限 / 间隔 | 15–20（示例配置 20，>25 时 validate 提醒）/ ≥60s；带多轮对话时 90s |
 | `sending.max_inspect_per_window` | 单跳最多打开几个详情页读 JD | 默认 24；调小更省请求，但额度可能发不满 |
 | `sending.hidden_b_probe` | A 额度满后，还允许读几个粗标 A? 的 JD（捞「自报互联网、实则门店」的隐藏 B） | 默认 6；行业字段不准就调大 |
 | `scoring.city_bonus` | 按 `cityName` 给本地岗加分，如 `{"示例城市": 2}` | 只影响同档排序；旧配置仍需明显小于 a_min |
 | `scoring.blob_bonus` | 单边加分：命中任一 term 就加（`[{terms:[...],score:3}]`） | 门店类、城市经理类各一条 |
 | `sending.verify_text` | 发送校验文本 | 默认取招呼语开头 8 字；`mode=llm` 时忽略，改用实际话术开头 |
 | `grading.*` | roles、tracks 词表、unknown_side、require_role_for_ab | 用户确认 A/B 标准后填写，不把公司行业当 JD |
-| `sending.grade_quota` / `carry_over` / `max_per_window` | 固定日配额、顺延、窗口上限 | 示例 A22/B8；max_per_window 同时限制本跳总发送量 |
+| `sending.grade_quota` / `carry_over` / `max_per_window` | 固定日配额、顺延、窗口上限 | 示例 A15/B5（合计 = daily_cap）；max_per_window 同时限制本跳总发送量 |
 | `schedule.timezone` / `windows` / `per_window` | 何时跑、固定模式每跳总数 | carry_over=false 才用 per_window；0 表示不发 |
 | `schedule.scan_windows` / `inbox_windows` / `summary_window` / `scan_pages` | tick 动作分派 | 专用窗口需在 windows；扫描默认 2 页 |
 

@@ -88,6 +88,15 @@ class NewUserPathTests(unittest.TestCase):
         self.assertEqual(data['errors'], [])
         self.assertEqual(Path(data['workdir']), self.box.workdir)
         self.assertEqual(data['timezone'], 'Asia/Shanghai')
+        # 新用户第一次 validate 不该就看到警告（MiniMax Code 实测暴露：示例 daily_cap=30 一跑就报「偏高」）
+        self.assertEqual(data['warnings'], [])
+
+    def test_example_quota_matches_documented_default(self):
+        cfg = json.loads(self.box.config.read_text(encoding='utf-8'))
+        sending = cfg['sending']
+        self.assertTrue(15 <= sending['daily_cap'] <= 20, 'README 写默认 15–20/天')
+        self.assertEqual(sum(sending['grade_quota'].values()), sending['daily_cap'])
+        self.assertGreaterEqual(sending['min_gap_seconds'], 60)
 
     def test_init_refuses_to_overwrite(self):
         rc, data, _ = self.box.cli('init')

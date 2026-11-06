@@ -118,12 +118,12 @@
     "min_score": 2
   },
   "sending": {
-    "_tip": "30 是配额示例，不是风险承诺；首次使用先确认日上限，建议 15–20/天，间隔 ≥60s。max_per_window 同时限制本跳总发送量。",
-    "daily_cap": 30,
+    "_tip": "默认 20/天（A15/B5）、间隔 ≥60s，与 README 的风控建议一致；要加量先读 docs/risk-control.md，>25 时 validate 会提醒。max_per_window 同时限制本跳总发送量。",
+    "daily_cap": 20,
     "min_gap_seconds": 60,
     "grade_quota": {
-      "A": 22,
-      "B": 8
+      "A": 15,
+      "B": 5
     },
     "carry_over": true,
     "max_per_window": 8,

@@ -187,7 +187,7 @@ python3 scripts/boss_hunt.py init          # 生成 ~/.boss-hunt/config.json
 词表支持正则；`side` 和 `label` 是解释性元数据，不触发隐藏规则。
 
 老配置缺少 `grading` 时保留 `scoring.a_min` 定级，缺 `grade_quota` 保留总日上限，不强制新增字段。
-新配置 `grade_quota={"A":22,"B":8}` 是固定日配额，`send N` 的 N 只是总数上限。
+新配置 `grade_quota={"A":15,"B":5}`（示例配置的值，合计等于 `daily_cap=20`）是固定日配额，`send N` 的 N 只是总数上限。
 每跳按 `ceil(各级剩余额度 / 剩余窗口数)` 分配，受 `sending.max_per_window` 限制；
 为避免末跳突发，该字段也限制本跳总发送数。跳过或失败不扣额度，不跨天累积。
 `carry_over=false` 使用 `schedule.per_window` 固定总数，仍受各级日配额约束。
