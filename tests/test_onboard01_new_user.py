@@ -26,7 +26,8 @@ CRON = SCRIPTS / 'cron'
 sys.path.insert(0, str(SCRIPTS))
 import boss_hunt as B  # noqa: E402
 
-DOCS = ['README.md', 'SKILL.md', 'AGENTS.md', 'docs/onboarding-interview.md', 'docs/agent-adapters.md']
+DOCS = ['README.md', 'SKILL.md', 'AGENTS.md', 'docs/onboarding-interview.md', 'docs/agent-adapters.md',
+        'docs/configuration.md', 'docs/cli.md']
 WRAPPERS = {'boss-hunt-tick.sh': 'tick', 'boss-hunt-chat.sh': 'chat', 'boss-hunt-inbox.sh': 'inbox'}
 
 
@@ -296,6 +297,28 @@ class DocCommandTests(unittest.TestCase):
         text = '\n'.join((ROOT / rel).read_text(encoding='utf-8') for rel in DOCS)
         stale = [span for span in NOT_COMMANDS if '`%s`' % span not in text]
         self.assertEqual(stale, [], '文档里已没有这些片段，豁免要删掉')
+
+    def test_relative_links_in_public_docs_resolve(self):
+        """README 与公开文档里的相对链接（含 #锚点前的文件部分）都指向仓库里真实存在的文件。"""
+        public = ['README.md', 'AGENTS.md', 'docs/configuration.md', 'docs/cli.md', 'docs/agent-adapters.md',
+                  'docs/onboarding-interview.md', 'docs/troubleshooting.md', 'docs/risk-control.md']
+        bad = []
+        for rel in public:
+            base = (ROOT / rel).parent
+            for target in re.findall(r'\]\(([^)\s]+)\)', (ROOT / rel).read_text(encoding='utf-8')):
+                if re.match(r'[a-z]+:', target) or target.startswith('#'):
+                    continue
+                path = target.split('#', 1)[0]
+                if not (base / path).exists():
+                    bad.append('%s → %s' % (rel, target))
+        self.assertEqual(bad, [])
+
+    def test_readme_points_to_moved_reference_docs(self):
+        readme = (ROOT / 'README.md').read_text(encoding='utf-8')
+        for doc in ('docs/configuration.md', 'docs/cli.md', 'docs/agent-adapters.md'):
+            self.assertIn('](%s)' % doc, readme)
+        cli = (ROOT / 'docs' / 'cli.md').read_text(encoding='utf-8')
+        self.assertIn('JSON 输出', cli)  # AGENTS.md / SKILL.md / agent-adapters 都指向这一节
 
     def test_wrappers_in_repo_are_all_documented(self):
         documented = {w for _, _, w, _ in doc_wrapper_calls()}

@@ -88,7 +88,7 @@ python3 scripts/boss_hunt.py inbox --json | jq '.interviews'
 python3 scripts/boss_hunt.py send  --json 3 | jq '{sent, day_count, skipped: (.skipped|length)}'
 ```
 
-- 固定字段 `schema`（当前 2）、`cmd`、`ok`；命令专用字段见 README「JSON 输出」。
+- 固定字段 `schema`（当前 2）、`cmd`、`ok`；命令专用字段见 [cli.md](cli.md)「JSON 输出」。
 - `ok` 是「命令跑通了」，不是「发出去了」：发送结果看 `items[].result`。
 - 人类可读块仍然写进 `runs.log`，日志排查方式不变。
 - `validate --json` 在配置有错时 `exit=1` 且 `errors[]` 非空 —— CI 里可以直接当检查用。

@@ -570,7 +570,7 @@ python3 scripts/dump_conversations.py [-o conv.json]   # 只读导出会话列�
 ```
 
 **给 harness / 脚本调用时加 `--json`**：stdout 只有一个 JSON 对象（`schema` / `cmd` / `ok` +
-命令专用字段），人类文本仍写 `runs.log`。字段表见 README「JSON 输出」，或直接
+命令专用字段），人类文本仍写 `runs.log`。字段表见 `docs/cli.md`「JSON 输出」，或直接
 `python3 scripts/boss_hunt.py plan --json | jq .summary`。
 
 **会话里不要整份读 `data/state.json`（几百 KB）或 `data/runs.log`（几百 KB）**：一次就把上下文吃掉，

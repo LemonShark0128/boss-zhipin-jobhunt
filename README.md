@@ -1,442 +1,164 @@
-# BOSS直聘 求职助手
+# BOSS直聘求职助手
 
-**把「筛岗位 + 发招呼 + 盯回复」变成一份可配置的脚本，而不是无脑海投。**
-
+[![Release](https://img.shields.io/github/v/release/LemonShark0128/boss-zhipin-jobhunt)](https://github.com/LemonShark0128/boss-zhipin-jobhunt/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
-[![Chrome](https://img.shields.io/badge/Chrome-required-yellow.svg)](https://www.google.com/chrome/)
-[![Token](https://img.shields.io/badge/LLM%20token-0-lightgrey.svg)](#工作原理)
 [![Powered by huashu-chrome](https://img.shields.io/badge/powered%20by-huashu--chrome-cb3837?logo=npm&logoColor=white)](https://github.com/alchaincyf/huashu-chrome)
 
-基于**你自己已登录的 Chrome**，按配置筛选 BOSS 直聘（zhipin.com）上的岗位、
-用你的招呼语打招呼、盯 HR 的新消息并按类别处理。所有个人化内容都在 `config.json`，
-代码里没有写死任何人的经历、城市或关键词。
+在你自己已登录的 Chrome 里，按一份配置文件筛选 BOSS 直聘（zhipin.com）岗位、发送招呼语、跟进 HR 消息的命令行工具。
+可以单独在终端运行、挂定时任务，也可以作为 Agent 技能交给 Claude Code、Codex、Hermes、Kimi Code、MiniMax Code 等使用。
 
-> 设计取向是「少而准」：默认每天 15–20 个、间隔 60s、跳过猎头/代招/需下载 App/验证码页，
-> 同一 HR 只发一次。它不绕过任何人机验证，也不替你答应面试时间。
+设计取向是「少而准」：默认每天 20 个、间隔 60 秒、分时段发送；不绕过验证码，不替你答应面试时间，不编造经历。
 
-**不挑 Agent，也不需要接口 key**：核心是纯 CLI（零 LLM token），终端直接能跑；
-交给 Agent 时按它的约定读 `SKILL.md` 或 `AGENTS.md`，是同一套流程（见「作为 Agent 技能使用」）。
+## 功能
 
----
-
-## 特性
-
-- 🔍 **多维筛选**：薪资下限、经验区间、学历、行业黑名单、公司/HR 黑名单、通勤区域、猎头/代招
-- 💬 **按岗位现写的招呼语**：读详情页 JD 正文，用本地 Ollama + 你的事实清单现写一条点名岗位、只挑对口战绩的话术（带数字溯源闸门，不过就回退模板）；也支持老的占位符模板模式。发送后回读页面确认真的发出去了
-- 📬 **收件箱分类**：感兴趣 / 约面试 / 不合适（`inbox` 只读不发）；回 HR 只走对话模块 `chat`，面试类只回「请先给时段，我确认后答复」，绝不自作主张
-- 🗂 **幂等记账**：`state.json` 按岗位 ID + HR 去重，跨天保留额度
-- ⏱ **零 token 运行**：纯 Python + 本地浏览器桥，可挂 cron 无人值守
-- 🧩 **两种用法**：独立 CLI，或作为 Agent 技能（含访谈清单）
-- 🧾 **结构化输出**：任意命令加 `--json` 输出单个 JSON 对象（`schema` 固定版本），方便 harness / 脚本直接解析
-- 📦 **可复制**：整个目录交给别人就能用，改配置不改代码
+- **按条件筛岗位**：薪资下限、经验与学历区间、行业 / 公司 / HR 黑名单、通勤区域、猎头与代招；读 JD 判定 A / B 档，按日配额投递。
+- **招呼语**：用模板渲染，或读取岗位 JD 由模型现写（本地 Ollama，或 DeepSeek / Kimi / MiniMax 等 OpenAI 兼容服务）。
+  模型写出的数字必须能在你给的事实清单或 JD 里找到，不通过就回退模板。
+- **收件箱与对话**：收件箱只读分类；对话模块按轮次问清工作要求、薪资结构、面试轮数与能否线上，
+  面试时间、期望薪资等需要你本人决定的问题一律转人工。
+- **定时运行**：投递、对话、收件箱三条 cron 入口共用单实例锁，挂定时前都可以加 `--dry-run` 离线校准。
+- **结构化输出**：所有命令支持 `--json`，便于脚本和 Agent 解析。
 
 ## 工作原理
 
 ```text
-用户登录的 Chrome
-      │  huashu-chrome（本地桥，127.0.0.1:8899）
+你已登录的 Chrome
+      │  huashu-chrome（本地桥 127.0.0.1:8899 + 浏览器扩展）
       ▼
-boss_hunt.py
-  ├─ scan   导航 /web/geek/jobs?query=…&city=… → 读页面自己发出的 joblist 响应
-  ├─ filter 逐条判：薪资/经验/学历/行业/公司/HR/区域/猎头/代招 → 打分排序
-  ├─ send   详情页 →（llm 模式：读 JD → 本地模型现写招呼语 → 数字溯源闸门）→ 点「立即沟通」→ 填写 → 发送 → 回读弹窗确认
-  └─ inbox  /web/geek/chat → 读 friend/getG → 分类播报（只读；回 HR 由 chat 对话模块负责）
+scripts/boss_hunt.py
+  ├─ scan   打开搜索页，读取页面自己发出的岗位列表请求
+  ├─ plan   按配置筛选、打分、分档，只报告不发送
+  ├─ send   打开详情页 → 生成招呼语 → 发送 → 回读页面确认已发出
+  ├─ inbox  读取消息列表并分类（只读）
+  └─ chat   对话模块：按轮次回复 HR、发附件简历
 ```
 
-**为什么不用接口直连？** 直接请求搜索接口几次就会返回 `code:37 环境存在异常`。
-脚本走的是「页面导航 + 抓取页面自己发出的请求」，带签名和 cookie，行为与人工浏览一致。
-同理，打开消息页会把未读清零，所以判「有没有新消息」用的是消息时间 + 发送方，不是未读数。
+所有动作都经由真实页面完成，带页面自己的签名和登录态；不直接请求接口（直接请求几次就会被判「环境异常」）。
 
-## 依赖与前置
+## 环境要求
 
-| 依赖 | 版本 / 说明 | 必需 |
-|--|--|--|
-| Chrome | 保持登录 BOSS | ✅ |
-| Python | 3.9+（用 `zoneinfo`） | ✅ |
-| Node.js | ≥20，提供 `npx` | ✅ |
-| [huashu-chrome](https://github.com/alchaincyf/huashu-chrome) | MIT，作者 [花叔](https://github.com/alchaincyf)；MCP server + 本地桥 | ✅ 运行时 `npx` 拉取，不打包 |
-| huashu-chrome **Chrome 扩展** | 浏览器不允许脚本代装，必须你点一次 | ✅ |
-| 本地 Ollama + 中文小模型 | `greeting.mode=llm` 时用；默认 `qwen3.5:9b`，直连启动别注入 `HTTPS_PROXY` | 可选 |
+| 依赖 | 说明 |
+|--|--|
+| Chrome | 保持登录 BOSS 直聘 |
+| Python | 3.9+，无第三方依赖 |
+| Node.js | 20+，运行时通过 `npx` 拉取 [huashu-chrome](https://github.com/alchaincyf/huashu-chrome) |
+| huashu-chrome 浏览器扩展 | 需手动安装一次：[Chrome 应用商店](https://chromewebstore.google.com/detail/foiljmaplphdfimfcnfdpekhdnfbgfbf)；装好后 `npx -y huashu-chrome doctor` 应显示「Chrome 扩展在线」 |
+| 模型（可选） | 仅「模型现写招呼语」需要：本地 Ollama，或 OpenAI 兼容服务的 API key |
 
-装扩展只需一次：
-
-- 商店一键装：<https://chromewebstore.google.com/detail/foiljmaplphdfimfcnfdpekhdnfbgfbf>
-- 商店打不开时手动加载：`npx -y huashu-chrome extension` 会打印扩展目录，
-  打开 `chrome://extensions` → 开发者模式 → 「加载已解压的扩展程序」选中该目录
-- 验证：`npx -y huashu-chrome doctor` 应显示「Chrome 扩展在线」
-
-> 本项目不调用 `huashu-chrome install`（那是给支持 MCP 的 Agent —— Claude Code / Codex 等 —— 写配置的），
-> 只需要扩展 + 运行时的 `npx`。如果 `doctor` 通了但脚本仍报 `NO_EXTENSION`，
-> 见 [`docs/troubleshooting.md`](docs/troubleshooting.md)。
+实测环境：macOS + Chrome + Python 3.9.6 + huashu-chrome 1.3.0。Linux 未实测；Windows 上定时 wrapper 不可用（依赖 `fcntl`）。
 
 ## 快速开始
 
-**环境**：Chrome（保持登录 BOSS）、Node.js ≥20（提供 `npx`）、Python 3.9+，外加上面的浏览器扩展。
-实测于 macOS + Chrome + Python 3.9.6 + huashu-chrome 1.3.0。
-
 ```bash
-git clone https://github.com/LemonShark0128/boss-zhipin-jobhunt.git boss-hunt && cd boss-hunt
-python3 scripts/boss_hunt.py init          # 生成 ~/.boss-hunt/config.json
+git clone https://github.com/LemonShark0128/boss-zhipin-jobhunt.git && cd boss-zhipin-jobhunt
+python3 scripts/boss_hunt.py init            # 生成 ~/.boss-hunt/config.json
 ```
 
-1. **登录**：在自己的 Chrome 里打开 <https://www.zhipin.com>，手机扫码登录。
+1. **填配置**：编辑 `~/.boss-hunt/config.json` 的 `user` / `targets` / `filters`（字段见 [配置说明](docs/configuration.md)），然后校验：
    ```bash
-   python3 scripts/boss_hunt.py login-check   # 只读探测，输出 ✅ 已登录 再继续
+   python3 scripts/boss_hunt.py validate
+   python3 scripts/boss_hunt.py template      # 预览招呼语与字数
    ```
-2. **改配置**：编辑 `~/.boss-hunt/config.json` 的 `user` / `targets` / `filters`（字段见下）。
+2. **登录并体检**：在 Chrome 里打开 <https://www.zhipin.com> 扫码登录，再运行：
    ```bash
-   python3 scripts/boss_hunt.py validate      # 离线校验
-   python3 scripts/boss_hunt.py template      # 预览模板招呼语、字数、发送校验文本
-   python3 scripts/boss_hunt.py greet --job-id <encryptJobId> --times 2   # 预览该岗位现写的招呼语
+   python3 scripts/boss_hunt.py login-check
+   python3 scripts/boss_hunt.py preflight     # 登录态、BOSS 自带招呼语开关、今日额度
    ```
-3. **体检 + 干跑**（**先别发**）：
+3. **抓取并查看名单**（不发送）：
    ```bash
-   python3 scripts/boss_hunt.py preflight            # 登录态 + BOSS 自带招呼语开关 + 今日额度
-   python3 scripts/boss_hunt.py scan --pages 1       # 抓 1 页验证链路
-   python3 scripts/boss_hunt.py plan --top 15        # 只报告会投哪些，不发
+   python3 scripts/boss_hunt.py scan --pages 1
+   python3 scripts/boss_hunt.py plan --top 15
    ```
-4. **首次只发 1 个**：
+4. **先发 1 个**，确认 HR 收到、招呼语没有被截断：
    ```bash
    python3 scripts/boss_hunt.py send 1
    ```
-   看 HR 有没有回、招呼语有没有被截断，没问题再 `send 5`。
-5. **交给定时任务**（可选）：用仓库里的 wrapper——投递跳 `scripts/cron/boss-hunt-tick.sh`，开了对话模块还要挂
-   对话跳 `scripts/cron/boss-hunt-chat.sh`（回 HR 的唯一通道），回消息跳 `scripts/cron/boss-hunt-inbox.sh` 只读播报可选。
-   三个共用一把锁、互不打架；cron 写法见 [`docs/agent-adapters.md`](docs/agent-adapters.md) 第 3 节。
+5. **挂定时任务**（可选）：先用真实入口离线校准，确认无误后再写进 cron，cron 写法见 [agent-adapters.md](docs/agent-adapters.md#3-挂定时)。
    ```bash
-   python3 /path/to/repo/scripts/boss_hunt.py tick --dry-run   # 先看各窗口会做什么（不开浏览器、不发送）
-   bash scripts/cron/boss-hunt-tick.sh --dry-run    # 挂 cron 前用真实入口把三条 wrapper 都干跑一遍
-   bash scripts/cron/boss-hunt-chat.sh --dry-run    # 不开浏览器：说明对话跳开没开、在不在时段
-   bash scripts/cron/boss-hunt-inbox.sh --dry-run   # 不开浏览器：校验配置、说明真跳只读哪段消息
+   bash scripts/cron/boss-hunt-tick.sh --dry-run    # 投递：当前是否在窗口、本跳预算
+   bash scripts/cron/boss-hunt-chat.sh --dry-run    # 对话：是否开启、是否在时段内
+   bash scripts/cron/boss-hunt-inbox.sh --dry-run   # 收件箱：配置是否可用
    ```
-   cron 挂在 `schedule.windows` 的整点上（如 `0 8,10,12,14,16,18,20,22 * * *`；tick 以 `schedule.timezone` 求值、窗口前后 10 分钟内都认）。仓库 wrapper 在 macOS 上自动用
-   `caffeinate` 防睡眠（否则系统睡眠会冻住 Chrome、断开本地桥），Linux 上没有就不加（可自行套 `systemd-inhibit`）；
-   Windows 没有 `fcntl`，wrapper 跑不了，需要自写等价的单实例锁。
 
-## 配置说明
+## 作为 Agent 技能使用
 
-完整示例见 [`assets/config.example.json`](assets/config.example.json)。
+| Agent | 入口 | 接入方式 |
+|--|--|--|
+| Hermes、Claude Code 等支持 Agent Skills 的 Agent | `SKILL.md` | 把整个目录放进技能目录，例如 `~/.claude/skills/boss-zhipin-jobhunt/` |
+| Codex、Cursor、Kimi Code、MiniMax Code 等读 `AGENTS.md` 的 Agent | `AGENTS.md` | 在仓库根打开即可，无需安装 |
+| 只能执行 shell 的脚本或自建 harness | `scripts/boss_hunt.py` | 直接调用命令，加 `--json` 解析输出 |
 
-```jsonc
-{
-  "user": {
-    "years_experience": 5,
-    "industry": "SaaS 企业服务",
-    "highlights": ["带 6 人团队做到年营收 1200 万", "新签中大型客户 80+ 家"],
-    "greeting_template": "您好，我有 {years} 年{industry}经验，{highlights}。看到贵司在招「{job_name}」，方便的话想和您详细聊聊。",
-    "interview_reply": "您好，方便安排线上面试吗？我这边时间需要先确认，您先给几个时段，我确认后再回复您。"
-  },
-  "targets": [
-    { "name": "主方向", "city": "示例城市", "city_code": "101020100",
-      "keywords": ["商务拓展经理", "BD经理"], "daily_share": 10 }
-  ],
-  "filters": {
-    "salary_min_k": 15,
-    "title_allow": ["经理", "主管", "总监", "负责人", "BDM"],
-    "industry_block": ["保险", "房产", "中介", "教育培训", "人力资源"],
-    "exclude_headhunter": true,
-    "exclude_proxy": true,
-    "experience": { "job_min_years_max": 8, "job_max_years_min": 2 }
-  },
-  "sending": { "daily_cap": 15, "min_gap_seconds": 60 },
-  "inbox":   { "lookback_hours": 72, "max_listed": 5 },
-  "schedule": { "timezone": "Asia/Shanghai", "windows": ["11:00", "15:00", "21:00"], "per_window": 5 }
-}
-```
+接入后 Agent 会按「访谈 → 登录 → 配置 → 干跑 → 定时」带你走一遍。MiniMax Code 已实测按 `AGENTS.md` 的指引自行跑通离线上手流程；
+各 Agent 的装载目录、执行 shell 与定时能力（含 WorkBuddy、DeepSeek Harness 的核实情况）见 [agent-adapters.md](docs/agent-adapters.md)。
 
-| 字段 | 作用 |
+## 文档
+
+| 文档 | 内容 |
 |--|--|
-| `user.greeting.mode` | `llm` = 每个岗位按 JD 现写；`template` = 渲染 `greeting_template`（默认，兼容旧配置） |
-| `user.greeting.facts` | llm 模式下唯一可引用的事实清单：逐条写清「哪段经历 + 数字」，模型编不出事实外的数字 |
-| `user.greeting.length` / `llm` | 字数闸门（建议 100–200）与本地模型参数（`think` 必须 `false`，否则思考模型只吐 thinking、正文为空） |
-| `user.greeting_template` | 模板模式的话术，也是 llm 模式失败时的回退；≥2 个占位符（80–200 字最佳，>380 会被拦） |
-| `user.interview_reply` | 面试类固定回复：只表达愿意面 + 请对方给时段 |
-| `targets[].city_code` | BOSS 数字城市码，已核对的城市见 [`docs/boss-site-notes.md`](docs/boss-site-notes.md) |
-| `targets[].daily_share` | 每个方向的每日配额，防止额度全被高分方向吃掉 |
-| `filters.title_allow/block` | 头衔白/黑名单（正则）；命中黑名单且不含白名单 → 拒 |
-| `filters.exclude_headhunter/exclude_proxy` | 排掉猎头职位与代招岗位 |
-| `filters.districts_allow` | 通勤圈；留空 = 不限 |
-| `sending.daily_cap` / `min_gap_seconds` | 每日上限 / 发送间隔；建议 15–20 与 ≥60s（`min_gap_seconds` 不写时投递、对话、账本闸门统一按 60） |
-| `inbox.lookback_hours` / `max_listed` / `stale_hours` | 收件箱（只读）回看时长 / 播报列几条 / 超时未回阈值 |
-| `inbox.patterns.{reject,interview,interested,system}` | 收件箱归类正则（可选，`validate` 会检查能否编译） |
+| [configuration.md](docs/configuration.md) | 全部配置字段、对话模块、A / B 分级、排班与拒绝复盘 |
+| [cli.md](docs/cli.md) | 子命令一览与 `--json` 输出字段 |
+| [agent-adapters.md](docs/agent-adapters.md) | 各 Agent 的接入方式、定时写法、模型服务商配置 |
+| [onboarding-interview.md](docs/onboarding-interview.md) | 首次接入的需求访谈清单 |
+| [risk-control.md](docs/risk-control.md) | 发送额度与风控阈值（含来源） |
+| [troubleshooting.md](docs/troubleshooting.md) | 本地桥、扩展、定时任务、收件箱的常见故障 |
+| [boss-site-notes.md](docs/boss-site-notes.md) | 页面结构、接口字段、已核对的城市码 |
+| [CHANGELOG.md](CHANGELOG.md) | 版本变更 |
 
-### 对话模块（`conversation.*`，`chat` 子命令，回 HR 的唯一通道）
+## 安全与边界
 
-| 字段 | 作用 |
-|--|--|
-| `enabled` / `dry` | 总开关 / 预演（只出计划不发；预演会打开会话、清未读） |
-| `hours` | 允许跑的整点（配置时区），默认 9–21 |
-| `per_hop` / `daily_cap` / `lookback_hours` | 每跳最多处理几个会话 / 每日最多回几个会话 / 只看多少小时内有新消息的会话 |
-| `templates` | 两轮问句等话术覆盖（键见 `conv_rules.DEFAULT_TEMPLATES`，如 `experience_tail`） |
-| `opener_fallback` | 承接句生成失败时的兜底 |
-| `auto_accept_resume_request` / `resume_request_card` | 过筛会话里 HR 发「要附件简历」卡片时自动点同意 / 卡片文字 |
-| `resume_sent_pattern` | 简历回执正则；**一般不要写**，用代码默认（含附件卡片「点击预览附件简历」） |
-| `system_texts` / `system_patterns` | 额外当系统消息的原文 / 正则（不是 HR 说话） |
-| `patterns` | 意图判定正则覆盖（`validate` 检查能否编译） |
-| `decline_industries` / `decline_text` / `decline_not_interested` | 黑名单行业（只看职责段）/ 回绝语 / 回绝后点「不感兴趣」 |
-| `pin_manual` / `pin_max_per_hop` | 需人工的会话在 BOSS 置顶（取消置顶 = 处理完）/ 每跳最多置顶几个 |
+- **额度**：平台不公布固定上限。本项目默认 20 个 / 天、间隔 ≥60 秒、分 2–4 个时段，依据见 [risk-control.md](docs/risk-control.md)。
+- **不做的事**：绕过验证码或人机验证、代填账号密码、群发同一句话、伪造经历、代你答应面试时间、交换电话或微信。
+- **单实例**：同一账号不要同时运行两套自动化，否则会对同一岗位重复打招呼。
+- **风险自负**：平台规则随时变化，本项目不保证账号不被限制，也不对求职结果作任何承诺。
 
-需人工的会话之后对方又发消息，会推「🙋 需人工·新消息」并重新置顶（每跳最多 3 条，只看列表快照、不回复）。
+## 常见问题
 
-## A/B 分级是怎么判的
+**会被封号吗？**
+没有工具能保证。本项目把频率压在人工水平、不直连接口、不绕过验证；遇到验证码会跳过并提示你手动处理。
 
-列表没有 JD 正文，先按 `grading.roles` 筛职能，再参考行业/公司弱信号标 `A?` / `B?`；
-职能不对口标 C。发送前读 JD，按每个 track 的 `jd_signals` 命中条数定最终 A/B，
-平分或无命中用 `unknown_side`（默认 B）。C 和缺 JD 不发送，分数只决定同档顺序。
-词表支持正则；`side` 和 `label` 是解释性元数据，不触发隐藏规则。
+**支持哪些城市？**
+在配置里填 BOSS 的城市码 `city_code` 即可。已核对的城市码见 [boss-site-notes.md](docs/boss-site-notes.md)；其他城市在网页版切换一次城市，URL 里的 `city=` 就是。
 
-老配置缺少 `grading` 时保留 `scoring.a_min` 定级，缺 `grade_quota` 保留总日上限，不强制新增字段。
-新配置 `grade_quota={"A":15,"B":5}`（示例配置的值，合计等于 `daily_cap=20`）是固定日配额，`send N` 的 N 只是总数上限。
-每跳按 `ceil(各级剩余额度 / 剩余窗口数)` 分配，受 `sending.max_per_window` 限制；
-为避免末跳突发，该字段也限制本跳总发送数。跳过或失败不扣额度，不跨天累积。
-`carry_over=false` 使用 `schedule.per_window` 固定总数，仍受各级日配额约束。
-B 本跳额度满时进入 `state.b_pool`，后续 B 阶段先取旧池；A 阶段优先。
+**能全自动聊到拿 offer 吗？**
+不能，也不打算做。打招呼和固定问题可以自动，涉及时间、薪资、经历的回复都会转给你。
 
-判级缓存保存 JD、哈希及规则/列表字段指纹。同一快照重复运行不再读取 JD；规则、列表字段或快照文件更新时间变化后重读，
-新 JD 哈希变化即重判。无法免请求检测网站远端 JD 的静默修改，调参后建议先重新 scan。
-
-## 换行业怎么改
-
-只改 `grading` + `filters` + `targets`，不改代码：替换职能词、各侧行业/公司与 JD 信号，
-再配置硬排除、搜索城市和关键词。示例中的「示例行业A/B」「示例城市」都是占位符，
-`100000000` 也要换为目标城市的真实代码。A/B 词表与个人经历独立，切勿照搬示例业绩。
-可增加第三、第四个 track；C 始终不发送，其余新增 track 只有显式设置同名日配额才可发送。
-
-```bash
-python3 scripts/boss_hunt.py grade --jd-file jd.txt --job-name '城市经理' --industry '示例行业A'
-python3 scripts/boss_hunt.py grades --top 20 --json
-python3 scripts/boss_hunt.py tick --dry-run
-python3 scripts/boss_hunt.py rejects --days 30 --json
-python3 scripts/boss_hunt.py summary --json
-```
-
-`grade` 默认岗位名取配置的第一个 role；调试真实岗位请显式传 `--job-name`。
-`grades` 统计全部 raw 快照（包括被其它过滤器挡住的岗位），已投数按 job_id 对应。
-
-## 单入口排班与拒绝复盘
-
-cron 在窗口整点调用 `tick`（也可以每 10 分钟调，但开了对话模块就别这样，会和 :30 对话跳抢锁），由 `schedule.timezone` 和 `windows` 判窗口（同日 ±10 分钟）：
-每个窗口都投递：`scan_windows` 先补池再投递，`inbox_windows` 投递后再读收件箱（只读），
-`summary_window` 投递后追加当天总结。各专用窗口须列入 `windows`（以 `tick --dry-run` 的 `actions` 为准）。
-同日同窗口成功后不会重复执行；失败保留未用额度，后跳重新摊分。
-
-`tick` 与现有 wrapper 共用 `data/.lock`。外层 wrapper 不要再持同一把锁调用 tick，
-否则内层会跳过；遗留锁保守跳过，不自动抢锁。tick 要求本地桥/扩展已在线，
-不可连接时快速退出，不在定时跳中循环唤醒。40 分钟后停止业务，留时间清理自身标签；
-Unix 使用 alarm，其他平台在业务循环检查预算，不能保证正在阻塞的调用立即停止。
-
-`data/rejects.json` 保存明确拒绝和满 72h 的无回复。含糊说法不计；会话缺失、末条为空或
-公司匹配有歧义不算无回复。归属只按已发记录/可见会话判断，不以 `fromId` 判消息方。
-同岗位幂等，no_reply 可升级 explicit 并保留首次 detected_ts；explicit_ts 表示升级日期。
-`inbox.reject_reasons` 可覆盖原因正则映射；方向统计用投递时的 target。
-
-`summary` 完全离线，输出当天投递、当天新增拒绝/无回复、累计与待确认面试。
-待确认面试来自最近 inbox 的本地 pending，成功回复或明确拒绝会清除；未再次同步前可能陈旧。
-无新增活动且无待确认时 `activity=false`，文字「今天没有活动」；cron 依据 JSON 的 activity 判空。
-有待确认时仍显示，以免遗漏。脚本不直接推送消息，外部调度器自行消费 JSON。
-
-| 新配置 | 含义 |
-|--|--|
-| `grading.*` | 职能词、tracks 的词表与未知归属处理 |
-| `sending.grade_quota` / `carry_over` / `max_per_window` | 日配额、失败顺延、每跳上限 |
-| `schedule.*_windows` / `summary_window` / `scan_pages` | 扫描/收件箱/总结窗口与扫描页数 |
-
-## 命令行
-
-```bash
-python3 scripts/boss_hunt.py init|validate|template|login-check|preflight
-python3 scripts/boss_hunt.py greet --job-id <id> [--times 2] [--no-cache]   # 离线预览现写的招呼语
-python3 scripts/boss_hunt.py scan  [--target 名称] [--keyword 词] [--pages 3]
-python3 scripts/boss_hunt.py plan  [--top 20]     # 干跑：只报告
-python3 scripts/boss_hunt.py send  N              # 真发
-python3 scripts/boss_hunt.py inbox [--dry-run]    # 盯消息 + 分类（只读，不发消息）；--dry-run 不开浏览器
-python3 scripts/boss_hunt.py chat  [--dry-run]    # 对话模块：回 HR / 发简历（会真发）；--dry-run 离线校准，--dry 连浏览器预演
-python3 scripts/boss_hunt.py tick  [--dry-run]    # 定时投递跳入口：按窗口补池 + 投递
-python3 scripts/boss_hunt.py run   [--send N] [--inbox]   # 手动一键，定时任务不用它
-```
-
-配置查找顺序：`--config PATH` → `$BOSS_HUNT_CONFIG` → `~/.boss-hunt/config.json`。
-运行数据（`config.json`、`state.json`、`raw/`、`runs.log`、`send_ledger.jsonl`、`conversations.json`）默认在
-`~/.boss-hunt/`，本项目不会把它们上传到任何地方（招呼语 / 承接句若配置云端模型，见 FAQ「数据会上传到哪」）。
-
-输出示例：
-
-```text
-【2026-10-22 12:17 Shanghai】
-- bridge:bridge_ok
-- extension:extension_ok
-- scan: +3 页
-- 候选 42（A18/B24）
-- A 已发｜商务拓展经理｜某某科技｜20-30K·14薪
-- 本轮发出 5，今日累计 5/15
-- 近 72 小时新消息 12 条（列表 40）｜对口 4｜感兴趣 2｜约面试 1
-- 已关自己开的标签页 2 个
-```
-
-### JSON 输出（给 harness / 脚本）
-
-任何命令都能加 `--json`（放全局位置或子命令后面都行）。stdout 只有一个 JSON 对象、
-没有其它文本；人读的块照样写进 `runs.log`，日志仍然可 grep。
-
-```bash
-python3 scripts/boss_hunt.py plan --json --top 5 | jq '.summary'
-python3 scripts/boss_hunt.py inbox --json | jq '.interviews'
-python3 scripts/boss_hunt.py validate --json   # 有错时 exit=1
-```
-
-固定字段：`schema`（当前 2）、`cmd`、`ok`。常用结构：
-
-| 命令 | 关键字段 |
-|--|--|
-| `plan --json` | `summary{candidates,grade_a,grade_b,unsent,remaining_today,daily_cap}`、`items[]{grade,score,job_id,title,salary,brand,city,district,flags,url}` |
-| `scan --json` | `pages_saved`、`errors[]`、`jobs_total`、`candidates`、`grade_a`、`grade_b` |
-| `send --json` | `ok`、`sent`、`day_count`、`daily_cap`、`items[]{job_id,title,brand,salary,result}`、`skipped[]` |
-| `inbox --json` | `ok`、`pending_verification`（有待核对的发送时为真，收件箱照常只读）、`unanswered.counts`、`messages_total`、`new_messages`、`new_matches[]`、`interest[]`、`interviews[]`（含 `replied`）；`replied_ok[]`、`reply_failed[]`、`auto_replied[]`、`auto_failed[]`、`manual_reply[]`、`followed_up[]`、`auto_reply_counts` 属已移除的旧回消息链路，恒为空/0，仅为兼容保留 |
-| `validate --json` | `ok`、`errors[]`、`warnings[]`、`targets[]`、`daily_cap`、`timezone` |
-| `login-check --json` | `logged`、`bridge`、`extension`、`url` |
-| `preflight --json` | `logged`、`greeting_switch`、`day_count`、`daily_cap` |
-| `template --json` | `text`、`chars`、`marker`、`recommended_chars`、`hard_max` |
-| `grade --json` | `grade`、`reason`、`scores`、`final` |
-| `grades --json` | `counts`、`applied`、`total`、`items[]` |
-| `tick --json` | `actions`、`window`、`workdir`、`dry_run`（干跑）、`send` / `inbox` / `summary`（执行时）；配置有误时 `ok=false` 与 `errors[]`（本跳不跑） |
-| `rejects --json` | `total`、`by_kind` / `by_attribution` / `by_reason` / `by_grade` / `by_target` |
-| `summary --json` | `sent`、`by_grade`、`rejects`、`no_reply`、`reason_breakdown`、`pending`、`activity` |
-| `run --json` | `scan`、`candidates`、`send`、`inbox`、`tabs_closed` |
-| `chat --json` | `ok`、`overview`、`notifications[]`、`candidates`、`processed`、`resume_sent`、`round1`/`round2`、`complete`、`manual`、`manual_new`、`declined`、`pinned`、`pending_verification` |
-| `unanswered --json` | `ok`、`counts{waiting_me,waiting_them,stale,unknown,pending_verify}`、`items{…}` |
-| `greet --json` | `ok`、`job_id`、`title`、`brand`、`jd_source`、`runs[]{text,source,chars,gate_ok,gate_reasons}` |
-| `ledger-ack --json` | `ok`、`items[]`（`--list`）或 `event`（核对后）；有错时 `error` |
-| `ledger-repair --json` | `ok`、`dry_run` 及诊断字段 |
-| `init --json` | `ok`、`config`；已存在时 `error: exists` |
-
-约定：`ok` 只表示「这条命令该做的事做成了」，**不等于「发出去了」**；`ok=false` 时退出码为 1
-（未登录、开关不明、没抓到页、配置缺失或无效等）；发送结果看
-`items[].result`（`sent` / `skip_already_chatted` / `unverified` …）。`schema` 变更会在
-CHANGELOG 注明。
-
-## 风控、边界与免责
-
-- **额度**：平台不公布固定数字，公开口径为免费号约 40–100 次/天、会员 50–200 次/天。
-  本项目默认 **15–20 个/天**、间隔 **≥60s**、分 2–4 个时段发送；数字与来源见
-  [`docs/risk-control.md`](docs/risk-control.md)。
-- **不做**：绕过验证码/人机验证、代填账号密码、批量群发同一句话、伪造经历、代替你答应面试时间。
-- **硬性要求**：同一账号不要同时运行两套自动化（别的油猴脚本 + 本项目），否则同一岗位会被
-  打两次招呼，风控特征最明显。
-- **账号风险自负**。平台规则随时变化，本项目不保证不被限制、也不对求职结果作任何承诺。
-  建议先 `plan` 看名单、`send 1` 验证，再决定是否定时运行。
+**数据会上传到哪？**
+运行数据（`state.json`、岗位快照、发送流水、对话记录）都保存在本机 `~/.boss-hunt/`，不会上传。
+唯一例外是模型：用本地 Ollama 时不出本机；配成云端服务商时，岗位 JD 片段、你的事实清单和 HR 原话会作为提示词发给该服务商。
 
 ## 目录结构
 
 ```text
 .
-├── README.md                    # 面向使用者的说明（本文件）
-├── SKILL.md                     # 技能/流程说明（Agent Skills 规范；同时是完整操作手册）
-├── AGENTS.md                    # 通用 harness 入口（Codex / Cursor / 自建 harness 都先读它）
-├── CHANGELOG.md                 # 版本变更
-├── assets/config.example.json   # 配置模板
-├── scripts/boss_hunt.py         # 主程序：scan / filter / send / inbox / run
-├── scripts/greet.py             # 按岗位 JD 现写招呼语：prompt / 闸门 / 缓存 / 回退
-├── scripts/chrome_mcp.py        # huashu-chrome 的 stdio MCP 客户端 + 页面封装
-├── .github/ISSUE_TEMPLATE/      # 问题模板（选择器失效 / 发送失败）
-└── docs/
-    ├── onboarding-interview.md  # 需求访谈清单（8 必问 + 10 个常被忘的点）
-    ├── boss-site-notes.md       # 页面选择器、接口字段、城市码、桥返回格式
-    ├── risk-control.md          # 额度与风控阈值（含来源与日期）
-    ├── troubleshooting.md       # 桥/扩展/定时任务/收件箱故障
-    ├── agent-driven-mode.md     # 没有 huashu-chrome 时用 Agent 驱动同一套动作
-    └── agent-adapters.md        # 各 Agent 的工具映射（装载 / 浏览器 / 定时）
+├── README.md
+├── SKILL.md                  # Agent Skills 入口，也是完整操作手册
+├── AGENTS.md                 # 通用 Agent / harness 入口
+├── CHANGELOG.md
+├── assets/config.example.json
+├── scripts/
+│   ├── boss_hunt.py          # 命令行入口
+│   ├── hunt_*.py             # 配置、筛选与判级、排班配额、状态
+│   ├── outbound.py           # 投递链路与发送执行
+│   ├── conversation.py       # 对话模块（conv_*.py、chat_*.py 为其组件）
+│   ├── greet.py              # 招呼语生成与校验
+│   ├── chrome_mcp.py         # huashu-chrome 客户端
+│   └── cron/                 # 投递 / 对话 / 收件箱三条定时入口及播报格式化
+├── docs/                     # 见上方「文档」
+├── references/               # 设计说明与经验记录
+└── tests/                    # 离线单元测试（python3 -m unittest discover -s tests）
 ```
 
-## 作为 Agent 技能使用
+## 参与贡献
 
-**接入不挑 Agent**，三个入口任选其一，指向的是同一套流程和同一份 `config.json`：
+- 页面改版导致选择器失效时，先运行 `scan --pages 1` 定位，再对照 [boss-site-notes.md](docs/boss-site-notes.md) 修改。
+- 新增或调整过滤规则时，请附上一个被误杀或漏放的真实岗位类型作为回归用例。
+- 提交前运行 `python3 -m unittest discover -s tests`，并确认没有把个人配置带进改动。
 
-| 你的 Agent | 入口 | 怎么接 |
-|--|--|--|
-| 遵循 Agent Skills 规范（Hermes、Claude Code…） | `SKILL.md` | 整个目录放进技能目录，按 `description` 自动触发 |
-| 读 `AGENTS.md` 的 harness（Codex CLI、Cursor、自建或厂商 harness） | `AGENTS.md` | 克隆到任意位置，不用安装、不用改配置 |
-| 只执行 shell / 自己写的小 harness | `scripts/boss_hunt.py` | 直接跑命令，输出是纯文本，自己解析 |
-| WorkBuddy / DeepSeek Harness / Kimi Code / MiniMax Code | `AGENTS.md` | 逐家核实情况见 [`docs/agent-adapters.md`](docs/agent-adapters.md) 第 6 节 |
+## 致谢
 
-```bash
-# Hermes
-cp -r . ~/.hermes/skills/productivity/boss-zhipin-jobhunt
-
-# Claude Code（个人级；也可放项目内 .claude/skills/）
-mkdir -p ~/.claude/skills && cp -r . ~/.claude/skills/boss-zhipin-jobhunt
-
-# Codex / Cursor / 其他 harness：什么都不用做，读仓库根的 AGENTS.md
-```
-
-装好后 Agent 会按「访谈 → 登录 → 配置 → 干跑 → 定时」带你走一遍，
-包括问你没想起来的事（通勤圈、猎头、已投公司、多方向配额、已读不回跟进）。
-
-**不需要 MCP，也不需要任何接口 key**：脚本模式是纯 CLI，只要 harness 能执行 shell 就能用。
-只有「代理模式」（不装扩展、让 Agent 自己点页面）才依赖浏览器工具，各 Agent 的对应关系见
-[`docs/agent-adapters.md`](docs/agent-adapters.md)。
-
-**跨平台**：macOS 为实测环境；Linux / Windows 的 Chrome 唤醒已内置平台分支（见 FAQ），但未实测。
-
-## FAQ
-
-**会被封号吗？**
-没有任何工具能保证。本项目的做法是把频率压到人工水平（15–20/天、60s 间隔、分时段）、
-不直连接口、不绕过验证、不并发多套脚本。撞到验证码会直接跳过并提示你手动处理。
-
-**支持哪些城市？**
-配置里填 `city_code` 即可。已核对的城市码在 [`docs/boss-site-notes.md`](docs/boss-site-notes.md)；
-其他城市在网页版切一次城市，URL 里的 `city=` 就是。
-
-**Windows / Linux 能用吗？**
-代码是纯 Python + stdio MCP，没有平台绑定。Chrome 唤醒已在 `chrome_mcp.py` 里按平台分支：
-macOS `open -a`、Linux `google-chrome` / `chromium`、Windows `start chrome`（macOS 实测，
-其余平台未实测，欢迎反馈）。定时脚本里的 `caffeinate` 是 macOS 防睡眠命令，其他平台去掉或换等价物。
-
-**为什么消息页的未读数永远是 0？**
-打开消息页会把未读清零，这是页面行为。项目改用「消息时间 + 发送方是否是自己」判断新消息。
-
-**招呼语会不会每个岗位都一样？**
-`user.greeting.mode=llm` 时不会：发送前读详情页 JD，用本地模型 + 你的 `greeting.facts`
-现写一条。三道护栏——① 数字必须能在 facts/JD 里找到（编不出业绩）；② 字数/纯文本/点名岗位
-不过闸门就带反馈重试一次；③ 仍不过或模型没起，回退 `greeting_template`，绝不发空话。
-生成结果按岗位缓存，同一个岗位重跑不会换词。`mode=template` 则回到「一套话术打天下」的老行为。
-
-**本地模型要多大？**
-实测 `qwen3.5:9b`（MLX，约 32 tok/s）单条 3–9 秒、`num_predict≈360` 够用。
-**`think` 必须设成 `false`**：思考模型默认先写一大段 thinking，`num_predict` 一到就被截断，
-返回的正文是空字符串（表现为 `llm_empty(length)`）。
-
-**能不能全自动聊到拿 offer？**
-不能，也不打算做。招呼和面试安排是模板化的，其余只报告给你；任何可能承诺时间、薪资、
-经历的回复都不会被自动发出。
-
-**数据会上传到哪？**
-运行数据（`state.json`、`raw/`、`send_ledger.jsonl`、`conversations.json` 等）全在本地，仓库的 `.gitignore` 已排除。
-例外是模型：`user.greeting.llm.provider` 用本地 Ollama 时什么都不出本机；配成 `deepseek` / `openai` 等云端模型时（Kimi、MiniMax 等 OpenAI 兼容服务写 `openai`，配置见
-[`docs/agent-adapters.md`](docs/agent-adapters.md) 第 7 节），
-岗位 JD 片段、你的事实清单和 HR 原话会作为提示词发给该服务商，用之前请自己权衡。
-
-## 贡献
-
-- 选择器失效是这类项目最常见的维护点：改版后先跑 `scan --pages 1` 定位，再按
-  [`docs/boss-site-notes.md`](docs/boss-site-notes.md) 更新，别凭猜改。
-- 新增过滤规则请附带一个真实反例（哪种岗位被误杀/漏放），方便回归。
-- 提交前跑 `python3 scripts/boss_hunt.py --help` 和 `validate`，确保没把个人配置带进 diff。
-
-## 依赖与致谢
-
-本项目的浏览器能力几乎全部来自 **[huashu-chrome](https://github.com/alchaincyf/huashu-chrome)**
-（作者 [花叔 / alchaincyf](https://github.com/alchaincyf)，MIT，npm 包名同为 `huashu-chrome`）：
-
-- 它提供 MCP server、127.0.0.1 上的本地桥和 Chrome 扩展，让脚本能用用户**当前浏览器的登录态**，
-  不必传 cookie、不必重新登录；
-- 本项目**不打包、不修改**它，只在运行时 `npx -y huashu-chrome` 调用；升级由 `npx` 自动取最新版；
-- 它的扩展必须由用户手动安装一次（浏览器不允许脚本代装），步骤见上面的「依赖与前置」；
-- 遇到 `NO_EXTENSION` / 桥连不上，先跑 `npx -y huashu-chrome doctor` 分清是本项目还是上游的问题；
-- 如果你觉得上游好用，去它的仓库点个 star：<https://github.com/alchaincyf/huashu-chrome>
-
-除了 huashu-chrome，本项目没有第三方 Python 依赖，也**没有任何接口 key**。
+浏览器能力来自 [huashu-chrome](https://github.com/alchaincyf/huashu-chrome)（作者 [花叔 / alchaincyf](https://github.com/alchaincyf)，MIT）。
+它提供本地桥与 Chrome 扩展，让脚本直接使用你当前浏览器的登录态。本项目不打包、不修改它，只在运行时通过 `npx` 调用。
 
 ## License
 

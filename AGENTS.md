@@ -55,7 +55,7 @@ python3 scripts/boss_hunt.py validate --json         # 有错 exit=1
 ```
 
 `schema`（当前 2）随结构变化升级；`ok=true` 只代表命令执行成功，**不代表真的发出去了** ——
-发送结果看 `items[].result`。字段表见 README「JSON 输出」。
+发送结果看 `items[].result`。字段表见 [`docs/cli.md`](docs/cli.md)「JSON 输出」。
 
 脚本模式需要 huashu-chrome 扩展（用户手动装一次）。装不了或用户不愿意装，
 才走「代理模式」：用你自己的浏览器工具按 `docs/agent-adapters.md` 的映射
