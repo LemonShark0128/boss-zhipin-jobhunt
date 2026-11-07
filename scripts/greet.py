@@ -653,17 +653,31 @@ def _env_key(name, llm=None):
         try:
             with open(os.path.expanduser(p), encoding="utf-8") as f:
                 for line in f:
-                    line = line.strip()
-                    if line.startswith("export "):
-                        line = line[len("export "):].lstrip()  # audit-01 R4：认 export 前缀
-                    if line.startswith(name + "="):
-                        value = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        if value:
-                            return value
-                        # 空占位不挡住后面文件里的真 key（audit-01 R4）
+                    value = _env_line_value(line, name)
+                    if value:
+                        return value
+                    # 空占位不挡住后面文件里的真 key（audit-01 R4）
         except Exception:
             continue
     return ""
+
+
+_ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
+
+
+def _env_line_value(line, name):
+    """.env 一行里 name 的值（不是这一行就返回 None）。认 export 前缀（audit-01 R4）、等号两边空格、
+    行尾「 # 注释」（iter-04）；引号里的内容原样保留（webhook、密码里可能有 #）。"""
+    m = _ENV_LINE.match(line)
+    if not m or m.group(1) != name:
+        return None
+    raw = m.group(2)
+    if raw[:1] in ("'", '"'):
+        end = raw.find(raw[0], 1)
+        if end > 0:
+            return raw[1:end]
+        return raw.strip("'\"")  # 引号没配对：按旧行为去掉引号
+    return re.split(r"\s+#", raw, maxsplit=1)[0].strip()
 
 
 # 走 OpenAI 兼容 /chat/completions 的 provider 名。Kimi（Moonshot）、MiniMax 等任何 OpenAI 兼容服务

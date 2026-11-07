@@ -261,7 +261,9 @@ class BacklogTests(PinBase):
         self.assertEqual([c.args[2]['name'] for c in pin.call_args_list], ['虚构HR2', '虚构HR3'])
         self.assertEqual(self.sleep.call_args_list, [unittest.mock.call(2)])
         saved = self.load()
-        self.assertEqual(saved['id:fiction1']['pin']['failures'], 1)
+        # iter-06：not_found = 网页列表里根本没有，当跳推带原话的提醒并停止重试（计满 3 次）
+        self.assertEqual(saved['id:fiction1']['pin']['failures'], 3)
+        self.assertTrue(any(n.startswith('📵') and '虚构原话1' in n for n in result['notifications']))
         self.assertIsNone(saved['id:fiction4']['pin']['pinned_ts'])
         self.assertEqual((result['pinned'], result['pin_backlog'], result['pin_failed']), (2, 2, 1))
         block = self.pin_block(result)[0]

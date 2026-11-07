@@ -158,6 +158,12 @@ def _want_pin(record, kind, text, msg_ts, now_ts, result=None, line=None):
             registered.append(line)
 
 
+def _pin_said(pin):
+    """iter-06：推送里带上 HR 原话（「：原话」），没有就空。"""
+    said = _push_text(pin.get('text'))
+    return '：' + said if said else ''
+
+
 def _pin_open(record):
     pin = record.get('pin')
     return isinstance(pin, dict) and not pin.get('done_ts')
@@ -588,15 +594,18 @@ def run(cfg, br, out, now=None, dry=False):
         initial_out_of_view = {entry[1] for entry in out_of_view}
         failed_keys = set()
         reveal_reasons = result['reveal_reasons'] = {}
+        last_reveal = {'reason': None}  # iter-06：置顶积压据此区分「网页列表里根本没有」
 
         def reveal_rows(item, key):
             nonlocal reveal_attempted
             reveal_attempted = True
+            last_reveal['reason'] = None
             receipt = chat_dom.reveal_conversation(br, tab, item)
             if not isinstance(receipt, dict) or receipt.get('ok') is not True:
                 reason = receipt.get('reason') if isinstance(receipt, dict) else None
                 reason = reason if isinstance(reason, str) and reason else 'invalid_response'
                 reveal_reasons[reason] = reveal_reasons.get(reason, 0) + 1
+                last_reveal['reason'] = reason
                 return None
             current = chat_dom.conversation_rows(br, tab)
             if not current and chat_dom.wait_rows_ready(br, tab, attempts=2):
@@ -606,6 +615,7 @@ def run(cfg, br, out, now=None, dry=False):
                 return current
             reason = 'rows_empty' if not current else 'rows_missing' if hits == 0 else 'rows_duplicate'
             reveal_reasons[reason] = reveal_reasons.get(reason, 0) + 1
+            last_reveal['reason'] = reason
             return None
 
         # conv-11：合并后最旧优先；同时间保留抓包中的顺序，揭示留到处理时。
@@ -709,9 +719,21 @@ def run(cfg, br, out, now=None, dry=False):
             conv_store.add_action(row, now_ts, 'pin', reason)
             result['pin_failed'] += 1
             if pin['failures'] == PIN_MAX_FAILURES:
-                line = '⚠️ 置顶失败 %s，需你手动看' % _identity(row)
+                line = '⚠️ 置顶失败 %s%s，需你手动看' % (_identity(row), _pin_said(pin))  # iter-06：带原话
                 result['notifications'].append(line)
                 out.append(line)
+
+        def pin_unreachable(key, row):
+            """iter-06：网页会话列表里根本没有这条（揭示 not_found；真机 BOSS「全部」列表不显示 relationType=5），
+            重试也找不到：当跳推一次带原话的提醒并停止自动置顶；同跳登记的「需人工」行由这条替换。"""
+            pin = row['pin']
+            pin['failures'] = PIN_MAX_FAILURES
+            conv_store.add_action(row, now_ts, 'pin', 'reveal_not_found')
+            result['pin_failed'] += 1
+            line = '📵 %s%s（网页会话列表里找不到这条，没法自动置顶，请在 App 里看）' % (_identity(row), _pin_said(pin))
+            drop = set(result.get('_pin_reg', {}).get(key, []))
+            result['notifications'] = [n for n in result['notifications'] if n not in drop] + [line]
+            out.append(line)
 
         def attempt_pin(key, backlog=False):
             nonlocal pin_attempts
@@ -1019,7 +1041,10 @@ def run(cfg, br, out, now=None, dry=False):
                     reveals += 1
                     if reveal_rows(pin_item(key, records[key]), key) is None:
                         pin_tried.add(key)
-                        pin_failed(key, records[key], 'reveal_failed')
+                        if last_reveal['reason'] == 'not_found':
+                            pin_unreachable(key, records[key])
+                        else:
+                            pin_failed(key, records[key], 'reveal_failed')
                         conv_store.save(path, records)
                         continue
                 attempt_pin(key, backlog=True)

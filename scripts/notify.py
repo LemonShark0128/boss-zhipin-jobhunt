@@ -106,6 +106,10 @@ def problems(cfg):
         missing = [k for k in ("smtp_host", "user", "to") if not email.get(k)]
         if missing:
             out.append("notify.email 缺 %s" % " / ".join(missing))
+        if email.get("to") and not recipients(email.get("to")):  # iter-03
+            out.append("notify.email.to 必须是邮箱字符串（多个用逗号分隔）或字符串列表")
+        if email.get("smtp_port") is not None and smtp_port(email) is None:
+            out.append("notify.email.smtp_port 必须是 1–65535 的整数（常用 465 SSL / 587 STARTTLS）")
     if name == "command":
         cmd = raw.get("command")
         if not (isinstance(cmd, list) and cmd and all(isinstance(x, str) and x for x in cmd)):
@@ -226,11 +230,11 @@ def _feishu(cfg, title, text):
 def _dingtalk(cfg, title, text):
     url = secret(cfg, "BOSS_NOTIFY_DINGTALK_WEBHOOK")
     sec = secret(cfg, "BOSS_NOTIFY_DINGTALK_SECRET")
-    if sec:  # 加签（未核实官方正文，按通行做法）：HmacSHA256(key=secret, msg=毫秒时间戳+"\n"+secret)
+    if sec:  # 官方加签：Base64(HmacSHA256(key=secret, msg=毫秒时间戳+"\n"+secret))，再 urlEncode 拼进 URL
         ts = str(int(time.time() * 1000))
         digest = hmac.new(sec.encode("utf-8"), ("%s\n%s" % (ts, sec)).encode("utf-8"), hashlib.sha256).digest()
         url += "&timestamp=%s&sign=%s" % (ts, urllib.parse.quote_plus(base64.b64encode(digest).decode("ascii")))
-    content = cap_bytes(_with_title(title, text), 18000)
+    content = cap_bytes(_with_title(title, text), 18000)  # 官方未写 text 长度上限，自截留余量
     _judge(*_post_json(url, {"msgtype": "text", "text": {"content": content}}), "errcode", (0,))
 
 
@@ -258,15 +262,41 @@ def _telegram(cfg, title, text):
     _judge(*_post_json("https://api.telegram.org/bot%s/sendMessage" % token, payload), "ok", (True,))
 
 
+def recipients(value):
+    """iter-03：收件人列表。字符串按逗号 / 分号（含全角）拆开；形状不对返回 []（problems 据此报错）。"""
+    if isinstance(value, str):
+        parts = re.split(r"[,;，；]", value)
+    elif isinstance(value, list) and all(isinstance(x, str) for x in value):
+        parts = value
+    else:
+        return []
+    return [x.strip() for x in parts if x.strip()]
+
+
+def smtp_port(conf):
+    """iter-03：端口没写 = 465；写了必须是 1–65535 的整数（"587" 这种数字字符串也认），否则 None。"""
+    raw = conf.get("smtp_port")
+    if raw is None or raw == "":
+        return 465
+    if isinstance(raw, bool) or isinstance(raw, float):
+        return None
+    try:
+        port = int(str(raw).strip())
+    except ValueError:
+        return None
+    return port if 0 < port < 65536 else None
+
+
 def _email(cfg, title, text):
     conf = options(cfg).get("email") or {}
-    to = conf["to"] if isinstance(conf["to"], list) else [conf["to"]]
+    to = recipients(conf["to"])
     sender = conf.get("from") or conf["user"]
     msg = MIMEText(text, "plain", "utf-8")
     msg["Subject"] = Header(title, "utf-8")
     msg["From"] = sender
     msg["To"] = ", ".join(to)
-    port = int(conf.get("smtp_port") or 465)
+    port = smtp_port(conf)
+    server = None
     try:
         if conf.get("starttls") or port == 587:
             server = smtplib.SMTP(conf["smtp_host"], port, timeout=20)
@@ -275,9 +305,17 @@ def _email(cfg, title, text):
             server = smtplib.SMTP_SSL(conf["smtp_host"], port, timeout=20)
         server.login(conf["user"], secret(cfg, "BOSS_NOTIFY_SMTP_PASSWORD"))
         server.sendmail(sender, to, msg.as_string())
-        server.quit()
     except (smtplib.SMTPException, OSError) as exc:
         raise NotifyError("邮件发送失败（%s）" % type(exc).__name__) from None
+    finally:
+        if server is not None:  # iter-03：失败时也关连接；关的时候再出错不影响结果
+            try:
+                server.quit()
+            except Exception:
+                try:
+                    server.close()
+                except Exception:
+                    pass
 
 
 def _command(cfg, title, text):

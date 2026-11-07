@@ -6,6 +6,7 @@ cleanup-02 起 inbox 只读不发，回 HR 只走对话模块（chat）。所以
 旧版（部署目录里那份）的「已回 / 失败 / 预演 / 待发资料」属于已移除的旧回话链路，恒为 0，已去掉。
 """
 import json
+import os
 import sys
 
 
@@ -19,6 +20,8 @@ PENDING_TEXT = {
 
 def render(data):
     lines = []
+    if os.environ.get("BOSS_INBOX_DRY_RUN") == "1" and data.get("ok") is False:
+        data = dict(data, dry_run=True)  # iter-02：wrapper 自己读配置失败的输出没有 dry_run 字段
     if data.get("dry_run"):  # onboard-01：inbox --dry-run 离线校准，不是一次真读，别出全 0 概览
         if data.get("message"):
             return [data["message"]]

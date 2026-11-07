@@ -165,6 +165,33 @@ class ChannelRequestTests(Isolated):
         self.assertEqual(body['msgtype'], 'text')
         self.assertIn('约面', body['text']['content'])
 
+    def test_dingtalk_sign_matches_official_python_sample(self):
+        """iter-01：照抄钉钉官方「自定义机器人安全设置」页的 Python 示例当 oracle（2026-11-06 读到正文），
+        连 URL 里的 urlEncode（quote_plus）一起比，不再用和实现同一个公式自证。"""
+        timestamp = '1700000000123'
+        secret = 'SECexample+/='
+        secret_enc = secret.encode('utf-8')
+        string_to_sign_enc = '{}\n{}'.format(timestamp, secret).encode('utf-8')
+        hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
+        sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
+        os.environ['BOSS_NOTIFY_DINGTALK_WEBHOOK'] = 'https://oapi.dingtalk.com/robot/send?access_token=T'
+        os.environ['BOSS_NOTIFY_DINGTALK_SECRET'] = secret
+        with self.fake_http((200, '{"errcode":0,"errmsg":"ok"}')), \
+                mock.patch.object(N.time, 'time', return_value=1700000000.123):
+            self.assertTrue(N.send(self.cfg('dingtalk'), 'x', 'tick')['sent'])
+        self.assertEqual(self.calls[0]['url'], 'https://oapi.dingtalk.com/robot/send?access_token=T'
+                                               '&timestamp=%s&sign=%s' % (timestamp, sign))
+        self.assertEqual(self.calls[0]['headers'].get('Content-Type'), 'application/json')
+
+    def test_dingtalk_security_errcode_is_failure(self):
+        """官方错误码：310000 = 关键词不在正文 / 签名不匹配 / 时间戳无效 / IP 不在白名单。"""
+        os.environ['BOSS_NOTIFY_DINGTALK_WEBHOOK'] = 'https://oapi.dingtalk.com/robot/send?access_token=T'
+        with self.fake_http((200, '{"errcode":310000,"errmsg":"keywords not in content"}')):
+            r = N.send(self.cfg('dingtalk'), 'x', 'tick')
+        self.assertFalse(r['ok'])
+        self.assertIn('310000', r['error'])
+        self.assertNotIn('access_token', r['error'])
+
     def test_serverchan_turbo_and_sc3(self):
         os.environ['BOSS_NOTIFY_SERVERCHAN_KEY'] = 'SCT123abc'
         with self.fake_http((200, '{"code":0}')):
@@ -418,6 +445,14 @@ class DocTests(unittest.TestCase):
         text = self.read('docs/onboarding-interview.md')
         must = text.split('## 用户常忘')[0]
         self.assertIn('notify.channel', must)
+
+    def test_dingtalk_row_is_verified(self):
+        """iter-01：钉钉接口已按官方页核实，表格与代码注释别再写「未核实」误导用户。"""
+        row = next(line for line in self.read('docs/configuration.md').splitlines()
+                   if line.startswith('| `dingtalk`'))
+        self.assertNotIn('未核实', row)
+        self.assertIn('已核实', row)
+        self.assertNotIn('未核实', self.read('scripts/notify.py').split('def _dingtalk', 1)[1].split('def _bark')[0])
 
     def test_adapters_cover_every_platform_and_channel(self):
         text = self.read('docs/agent-adapters.md')

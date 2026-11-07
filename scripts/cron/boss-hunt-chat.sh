@@ -24,6 +24,16 @@ try:
     # audit-01 R6：workdir 推导也在保护内（paths 不是对象、workdir 不是字符串时推人话，不推堆栈）
     workdir = os.path.abspath(os.path.expanduser(
         (cfg.get('paths') or {}).get('workdir') or os.path.join(os.path.dirname(config), 'data')))
+except FileNotFoundError:
+    # iter-02：新用户常在 init 之前先试 --dry-run，告诉他下一步（仍不带本机路径）
+    print(json.dumps({'ok': False, 'error': '配置文件读不到或格式不对：还没有配置文件，'
+                      '先运行 python3 scripts/boss_hunt.py init'}, ensure_ascii=False))
+    sys.exit(1)
+except json.JSONDecodeError as exc:
+    print(json.dumps({'ok': False, 'error': '配置文件读不到或格式不对：JSON 第 %d 行第 %d 列有误，'
+                      '改好后运行 python3 scripts/boss_hunt.py validate' % (exc.lineno, exc.colno)},
+                     ensure_ascii=False))
+    sys.exit(1)
 except (OSError, ValueError, AttributeError, TypeError):
     # audit-01 R4：推人话，不推堆栈和本机路径
     print(json.dumps({'ok': False, 'error': '配置文件读不到或格式不对'}, ensure_ascii=False))
@@ -51,7 +61,8 @@ DRY=0
 for arg in "$@"; do
     [ "$arg" = "--dry-run" ] && DRY=1
 done
-MSG=$(printf '%s' "$OUT" | "$PYTHON" "$SCRIPT_DIR/boss-hunt-chat-fmt.py")
+# iter-02：告诉播报这是干跑（wrapper 自己读配置失败时，输出里没有 dry_run 字段）
+MSG=$(printf '%s' "$OUT" | BOSS_CHAT_DRY_RUN="$DRY" "$PYTHON" "$SCRIPT_DIR/boss-hunt-chat-fmt.py")
 fmt_rc=$?
 if [ "$fmt_rc" -ne 0 ]; then
     FMT_ERR=$(printf '⚠️ BOSS 对话跳：播报渲染退出 %s（业务退出码 %s）' "$fmt_rc" "$rc")

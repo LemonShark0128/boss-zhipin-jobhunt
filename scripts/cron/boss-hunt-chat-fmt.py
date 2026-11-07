@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render chat JSON without touching configuration or runtime files."""
 import json
+import os
 import sys
 
 
@@ -21,7 +22,10 @@ def render(data):
     if data.get('dry_run') and data.get('message'):  # onboard-01：chat --dry-run 离线校准只推这一句
         lines.append(data['message'])
     if data.get('ok') is False and not lines:
-        lines.append(human_error(data.get('error')))
+        if os.environ.get('BOSS_CHAT_DRY_RUN') == '1':  # iter-02：干跑失败别渲染成「对话失败」事故
+            lines.append('🧪 对话跳干跑失败：' + str(data.get('error') or '未知错误'))
+        else:
+            lines.append(human_error(data.get('error')))
     if data.get('pending_verification') and not any('待核' in line for line in lines):
         lines.append('⚠️ 有发送结果待核对（先确认那个 HR 有没有收到消息）')
     if data.get('dry_run'):

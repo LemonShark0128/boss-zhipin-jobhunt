@@ -275,10 +275,9 @@ bash <skill>/scripts/cron/boss-hunt-inbox.sh --dry-run  # 回消息跳离线校�
   补一条会撞 `hunt_state.remember_reply` 的 `missing_confirmed_reply_event` 直接抛异常，整次 inbox 只吐一行报错、
   别的会话全不处理。成功分支只做 `used += 1` + `save_state` + 播报。
 
-**仓库外的定时 wrapper 别各拷一份播报脚本**：定时入口放在仓库外（例如 Agent 自己的 scripts 目录）时，
-让它直接调用仓库里的 `scripts/boss-hunt-tick-fmt.py` / `scripts/cron/*-fmt.py`，或像
-`scripts/cron/boss-hunt-inbox.sh` 那样只 `exec` 仓库脚本。若拷了一份到部署目录，只改仓库版本不会生效，
-必须同步。验证：把 `{'window','today_sent','send'}` 的 json 管道喂给**定时任务实际调用的那份** fmt 看输出。
+**仓库外的定时入口只 `exec` 仓库脚本，别各拷一份**（iter-05）：定时入口放在仓库外（例如 Agent 自己的 scripts 目录）时，
+像 `exec /bin/bash <仓库>/scripts/cron/boss-hunt-tick.sh "$@"` 这样只转调仓库 wrapper，播报格式脚本只有仓库一份。
+拷一份到部署目录，以后只改仓库版本就不会生效（2026-11-06 踩过）。
 
 **（历史，旧 inbox 自动回话链路（`reply.py` / `human.py` / `reply-to`）已于 2026-11-06 cleanup-02 移除）自动回话不再静默（2026-10-29）**：`inbox()` 的自动回话循环原来有三个静默 `continue`
 （打开会话失败 / 最后一句是我说的 / 归属不明），实测会出现「新招呼 40 个｜今日已回 0/3」而一行说明都没有。

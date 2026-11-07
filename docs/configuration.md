@@ -66,7 +66,7 @@
 "notify": { "channel": "command", "command": ["/path/to/my-push.sh"] }
 ```
 
-**凭据不写进 `config.json`**，写进 `~/.boss-hunt/.env`（一行一个 `变量名=值`；也认环境变量、`notify.env_file`、
+**凭据不写进 `config.json`**，写进 `~/.boss-hunt/.env`（一行一个 `变量名=值`，行尾可写 ` # 备注`，值里有空格或 `#` 就加引号；也认环境变量、`notify.env_file`、
 `$BOSS_HUNT_ENV_FILE`、`~/.hermes/.env`，与模型 key 同一套查找顺序）。配好后：
 
 ```bash
@@ -81,11 +81,11 @@ python3 scripts/boss_hunt.py notify --test    # 真发一条测试，确认手�
 | `pushplus` | 个人微信（PushPlus 公众号） | `BOSS_NOTIFY_PUSHPLUS_TOKEN` | 以纯文本模板发送 | 已核实（官方接口文档 V1.18）；`code=200` 只表示服务器收下，不保证送达，以 `--test` 实收为准 |
 | `wecom` | 企业微信群（群机器人） | `BOSS_NOTIFY_WECOM_WEBHOOK`（完整 webhook 地址） | 建一个只有自己的群再加机器人；单条超过 2048 字节会截断；每个机器人 20 条/分钟 | 已核实格式与限制；成功码 `errcode=0` 未在页面写明 |
 | `feishu` | 飞书群（自定义机器人） | `BOSS_NOTIFY_FEISHU_WEBHOOK`；开了签名校验再加 `BOSS_NOTIFY_FEISHU_SECRET` | 安全设置选关键词时加 `BOSS`（每条都带） | 已核实（含签名算法） |
-| `dingtalk` | 钉钉群（自定义机器人） | `BOSS_NOTIFY_DINGTALK_WEBHOOK`；加签再加 `BOSS_NOTIFY_DINGTALK_SECRET` | 安全设置选关键词时加 `BOSS` | **未核实**：官方页面正文读不到，按通行做法实现，务必 `--test` |
+| `dingtalk` | 钉钉群（自定义机器人） | `BOSS_NOTIFY_DINGTALK_WEBHOOK`；加签再加 `BOSS_NOTIFY_DINGTALK_SECRET` | 安全设置选关键词时加 `BOSS`；每个机器人 20 条/分钟，超了限流 10 分钟 | 已核实（官方「自定义机器人安全设置 / 发送群消息」页，含加签算法与 `errcode=0`；`310000` = 关键词、签名或时间戳校验没过）；官方未写正文长度上限，脚本按 18000 字节自截 |
 | `bark` | iPhone 通知（Bark App） | `BOSS_NOTIFY_BARK_KEY` | 自建服务器写 `notify.server` | 部分核实：官方 README 写明 `POST /:key` 与 `title` / `body`；成功码 `code=200` 未核实 |
 | `ntfy` | 安卓 / iPhone / 桌面通知（ntfy App） | `BOSS_NOTIFY_NTFY_TOPIC` | topic 谁知道谁能订阅，起一个长随机名；自建服务器写 `notify.server`；正文超 4096 字节截断 | 已核实（标题按 RFC 2047 编码） |
 | `telegram` | Telegram 机器人私聊 | `BOSS_NOTIFY_TELEGRAM_TOKEN`、`BOSS_NOTIFY_TELEGRAM_CHAT_ID` | 国内网络需要代理；超 4096 字符截断 | 已核实端点与 `ok` 字段；长度上限部分核实 |
-| `email` | 邮箱 | `BOSS_NOTIFY_SMTP_PASSWORD` | QQ / 163 等邮箱填「授权码」，不是登录密码；465 走 SSL，587 走 STARTTLS | 标准 SMTP（Python 标准库） |
+| `email` | 邮箱 | `BOSS_NOTIFY_SMTP_PASSWORD` | QQ / 163 等邮箱填「授权码」，不是登录密码；465 走 SSL，587 走 STARTTLS；多个收件人 `"to"` 用逗号分隔或写成列表 | 标准 SMTP（Python 标准库） |
 | `command` | 你自己的脚本 | — | 任何上面没有的渠道都能接；60 秒超时，非 0 退出算失败 | — |
 
 ## 对话模块（`conversation.*`，`chat` 子命令，回 HR 的唯一通道）

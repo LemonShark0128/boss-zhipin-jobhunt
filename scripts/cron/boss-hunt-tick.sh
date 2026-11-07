@@ -1,7 +1,7 @@
 #!/bin/bash
 # 投递跳入口（cron 挂在 schedule.windows 整点）：tick 按窗口补池 + 投递（+ 可选收件箱/小结）。
 # 与对话跳、回消息跳共用 <workdir>/.wrapperlock（flock），锁被占就静默跳过本跳；保留业务退出码。
-# audit-01 R5：给新用户的仓库版 wrapper（作者本机的投递跳另有部署版，行为等价）。
+# 唯一实现：放在仓库外的定时入口（如 Agent 自己的 scripts 目录）只 exec 本文件，不要另拷一份（iter-05）。
 set -u
 export no_proxy=localhost,127.0.0.1,::1
 export NO_PROXY=localhost,127.0.0.1,::1
@@ -27,6 +27,16 @@ try:
     # audit-01 R6：workdir 推导也在保护内（paths 不是对象、workdir 不是字符串时推人话，不推堆栈）
     workdir = os.path.abspath(os.path.expanduser(
         (cfg.get('paths') or {}).get('workdir') or os.path.join(os.path.dirname(config), 'data')))
+except FileNotFoundError:
+    # iter-02：新用户常在 init 之前先试 --dry-run，告诉他下一步（仍不带本机路径）
+    print(json.dumps({'ok': False, 'error': '配置文件读不到或格式不对：还没有配置文件，'
+                      '先运行 python3 scripts/boss_hunt.py init'}, ensure_ascii=False))
+    sys.exit(1)
+except json.JSONDecodeError as exc:
+    print(json.dumps({'ok': False, 'error': '配置文件读不到或格式不对：JSON 第 %d 行第 %d 列有误，'
+                      '改好后运行 python3 scripts/boss_hunt.py validate' % (exc.lineno, exc.colno)},
+                     ensure_ascii=False))
+    sys.exit(1)
 except (OSError, ValueError, AttributeError, TypeError):
     # audit-01 R4：推人话，不推堆栈和本机路径
     print(json.dumps({'ok': False, 'error': '配置文件读不到或格式不对'}, ensure_ascii=False))
