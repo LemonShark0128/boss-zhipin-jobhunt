@@ -49,6 +49,44 @@
 | `sending.daily_cap` / `min_gap_seconds` | 每日上限 / 发送间隔；建议 15–20 与 ≥60s（`min_gap_seconds` 不写时投递、对话、账本闸门统一按 60） |
 | `inbox.lookback_hours` / `max_listed` / `stale_hours` | 收件箱（只读）回看时长 / 播报列几条 / 超时未回阈值 |
 | `inbox.patterns.{reject,interview,interested,system}` | 收件箱归类正则（可选，`validate` 会检查能否编译） |
+| `notify.channel` | 定时结果推给谁，见下方「推送」；示例配置是 `none` |
+
+## 推送（定时结果推给谁）
+
+定时任务由系统 cron 跑 wrapper，跑的时候没有 Agent 在场。wrapper 渲染完播报后调 `notify --stdin`，
+按 `notify.channel` 推到你选的渠道；推送失败只记进 `runs.log`，不影响投递，也不改 wrapper 的退出码。
+`--dry-run` 不推，只在最后一行报告推送配置是否就绪。
+
+```jsonc
+"notify": { "channel": "wecom" }
+// email 另写：
+"notify": { "channel": "email",
+            "email": { "smtp_host": "smtp.qq.com", "smtp_port": 465, "user": "me@qq.com", "to": "me@qq.com" } }
+// command 另写（argv 列表，不经过 shell；正文从 stdin 传入，标题在环境变量 BOSS_NOTIFY_TITLE）：
+"notify": { "channel": "command", "command": ["/path/to/my-push.sh"] }
+```
+
+**凭据不写进 `config.json`**，写进 `~/.boss-hunt/.env`（一行一个 `变量名=值`；也认环境变量、`notify.env_file`、
+`$BOSS_HUNT_ENV_FILE`、`~/.hermes/.env`，与模型 key 同一套查找顺序）。配好后：
+
+```bash
+python3 scripts/boss_hunt.py notify --check   # 不联网：渠道与凭据是否就绪
+python3 scripts/boss_hunt.py notify --test    # 真发一条测试，确认手机上收到
+```
+
+| `channel` | 推到哪 | `.env` 里的凭据 | 要点 | 接口核实（2026-11-06） |
+|--|--|--|--|--|
+| `none` | 不由脚本推 | — | 用 Hermes 等会转发 wrapper 输出的调度器时选它，否则会收到两份；也适合只看 `runs.log` | — |
+| `serverchan` | 个人微信（Server酱 服务号） | `BOSS_NOTIFY_SERVERCHAN_KEY`（SendKey） | `SCT` 开头走 Turbo，`sctp` 开头走 Server酱³ | Server酱³ 已核实（官方 API 文档）；Turbo 地址与字段依据作者官方示例代码，成功码 `code=0` 未核实 |
+| `pushplus` | 个人微信（PushPlus 公众号） | `BOSS_NOTIFY_PUSHPLUS_TOKEN` | 以纯文本模板发送 | 已核实（官方接口文档 V1.18）；`code=200` 只表示服务器收下，不保证送达，以 `--test` 实收为准 |
+| `wecom` | 企业微信群（群机器人） | `BOSS_NOTIFY_WECOM_WEBHOOK`（完整 webhook 地址） | 建一个只有自己的群再加机器人；单条超过 2048 字节会截断；每个机器人 20 条/分钟 | 已核实格式与限制；成功码 `errcode=0` 未在页面写明 |
+| `feishu` | 飞书群（自定义机器人） | `BOSS_NOTIFY_FEISHU_WEBHOOK`；开了签名校验再加 `BOSS_NOTIFY_FEISHU_SECRET` | 安全设置选关键词时加 `BOSS`（每条都带） | 已核实（含签名算法） |
+| `dingtalk` | 钉钉群（自定义机器人） | `BOSS_NOTIFY_DINGTALK_WEBHOOK`；加签再加 `BOSS_NOTIFY_DINGTALK_SECRET` | 安全设置选关键词时加 `BOSS` | **未核实**：官方页面正文读不到，按通行做法实现，务必 `--test` |
+| `bark` | iPhone 通知（Bark App） | `BOSS_NOTIFY_BARK_KEY` | 自建服务器写 `notify.server` | 部分核实：官方 README 写明 `POST /:key` 与 `title` / `body`；成功码 `code=200` 未核实 |
+| `ntfy` | 安卓 / iPhone / 桌面通知（ntfy App） | `BOSS_NOTIFY_NTFY_TOPIC` | topic 谁知道谁能订阅，起一个长随机名；自建服务器写 `notify.server`；正文超 4096 字节截断 | 已核实（标题按 RFC 2047 编码） |
+| `telegram` | Telegram 机器人私聊 | `BOSS_NOTIFY_TELEGRAM_TOKEN`、`BOSS_NOTIFY_TELEGRAM_CHAT_ID` | 国内网络需要代理；超 4096 字符截断 | 已核实端点与 `ok` 字段；长度上限部分核实 |
+| `email` | 邮箱 | `BOSS_NOTIFY_SMTP_PASSWORD` | QQ / 163 等邮箱填「授权码」，不是登录密码；465 走 SSL，587 走 STARTTLS | 标准 SMTP（Python 标准库） |
+| `command` | 你自己的脚本 | — | 任何上面没有的渠道都能接；60 秒超时，非 0 退出算失败 | — |
 
 ## 对话模块（`conversation.*`，`chat` 子命令，回 HR 的唯一通道）
 
@@ -123,7 +161,7 @@ Unix 使用 alarm，其他平台在业务循环检查预算，不能保证正在
 `summary` 完全离线，输出当天投递、当天新增拒绝/无回复、累计与待确认面试。
 待确认面试来自最近 inbox 的本地 pending，成功回复或明确拒绝会清除；未再次同步前可能陈旧。
 无新增活动且无待确认时 `activity=false`，文字「今天没有活动」；cron 依据 JSON 的 activity 判空。
-有待确认时仍显示，以免遗漏。脚本不直接推送消息，外部调度器自行消费 JSON。
+有待确认时仍显示，以免遗漏。`summary` 本身不推送；定时推送见上方「推送」。
 
 | 新配置 | 含义 |
 |--|--|

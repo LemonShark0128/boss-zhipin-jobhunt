@@ -79,9 +79,9 @@ Linux `google-chrome`｜`chromium` / Windows `start chrome`），非 macOS 分�
 
 ### 1. 访谈（一次问完）
 
-必问 8 条 + 用户常忘的 10 条，都在 `docs/onboarding-interview.md`。
+必问 9 条 + 用户常忘的 10 条，都在 `docs/onboarding-interview.md`。
 最少要拿到：**岗位关键词、城市、薪资下限、年限/学历、排除行业、三段带数字的成绩、
-每日上限、面试怎么回**。拿不全就先按默认值跑，之后改配置。
+每日上限、面试怎么回、定时结果推给谁**。拿不全就先按默认值跑，之后改配置。
 
 ### 2. 登录
 
@@ -177,6 +177,18 @@ python3 scripts/boss_hunt.py send 2              # 首跑验证链路用 2：sen
   `day_by_target` 一并回退，再跑 `preflight` 核对「今日已发 N」。
 
 ### 5. 交给定时任务（可选）
+
+**先配好「结果推给谁」，再挂定时。** 系统 cron 跑 wrapper 时没有 Agent 在场，输出只有 Hermes 这类调度器会转发；
+用其他 Agent 接入的用户不配推送就什么都收不到。问用户在哪里看消息，按 `docs/agent-adapters.md`「定时结果推给谁」
+选 `notify.channel`，凭据请用户自己写进 `~/.boss-hunt/.env`（不要让用户把 key 贴进对话），然后：
+
+```bash
+python3 scripts/boss_hunt.py notify --check   # 不联网：渠道与凭据是否就绪
+python3 scripts/boss_hunt.py notify --test    # 征得同意后真发一条测试，等用户确认收到
+```
+
+wrapper 真跳渲染完播报会按 `notify` 推出去（推送失败只记 `runs.log`，不改退出码）；`--dry-run` 不推，只在最后一行报告推送配置。
+用 Hermes 转发 stdout 的部署选 `none`，否则会收到两份。
 
 新配置推荐单入口 `tick`，由脚本按配置时区分派动作，先用 `tick --dry-run` 校准：
 
@@ -301,7 +313,7 @@ bash <skill>/scripts/cron/boss-hunt-inbox.sh --dry-run  # 回消息跳离线校�
 `scan_windows` 以外的补池失败例外：`inbox_windows` 的失败仍整跳退出，回消息那条路径不降级。
 
 各 Agent 定时映射见 `docs/agent-adapters.md`。挂定时前先验证真实 wrapper 的 dry-run 入口；
-真发必须另有用户授权。脚本不直接推送消息，外部 cron 侧读取 JSON 决定如何通知。
+真发必须另有用户授权。推送由 wrapper 调 `notify` 完成（`notify.channel=none` 时不推，交给外部调度器读 stdout / JSON）。
 
 **播报丢了要有据可查（2026-10-29）**：投递失败发生在 tick 退出之后（推送渠道侧），脚本不可能知道这条发没发出去。
 所以 `boss-hunt-tick-fmt.py` 渲染完会把同一条文本追加到 `~/.boss-hunt/data/broadcasts.log`
@@ -504,7 +516,7 @@ Unix 有 alarm，其他平台仅循环间检查。遗留锁不自动删除，避
 后者会把 HR 收到招呼一分钟后的「请给几个面试时段」判成我方，然后在 `inbox` 里 `continue` 掉，
 整段十分钟区间的回信永远不处理。判不出归属就记 `unknown` 进待核对：既不算已回复，也不入无回复库。
 查不到会话不算无回复。待确认仅统计已同步、未处理的面试消息，可能陈旧。
-summary.activity=false 时 cron 可不推送；有待确认仍展示。脚本不直接推送消息。
+summary.activity=false 时 cron 可不推送；有待确认仍展示。summary 本身不推送。
 
 Phase B 的旧回复引擎 `scripts/reply.py` 已于 2026-11-06 移除（cleanup-02），回 HR 只走对话模块（`chat`）。
 归属判定靠会话气泡的 `.item-mine`（列表接口的 `fromId` 实测不可靠，别用）这条仍然适用。
@@ -566,6 +578,7 @@ python3 scripts/boss_hunt.py rejects [--days 30] [--json]
 python3 scripts/boss_hunt.py ledger-repair [--dry-run|--apply]   # 隔离发送流水损坏尾部，不改前缀
 python3 scripts/boss_hunt.py ledger-ack --list | <event_id> --sent --conv-key <key> --text-sha256 <hash>   # 人工核对 pending_verification；hash 从 --list 的 text_sha256 取，落成 --not-sent 同形
 python3 scripts/boss_hunt.py summary [--json]
+python3 scripts/boss_hunt.py notify --check|--test   # 推送：看配置（不联网）/ 真发测试（先征得同意）
 python3 scripts/dump_conversations.py [-o conv.json]   # 只读导出会话列表（谁回了什么），见 round-audit 第 6 节
 ```
 

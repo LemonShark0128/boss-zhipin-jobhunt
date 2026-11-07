@@ -42,6 +42,7 @@ import hunt_config as HC
 import hunt_filter as HF
 import hunt_schedule as HQ
 import hunt_state as HS
+import notify as N
 import outbound as O
 
 
@@ -1671,6 +1672,62 @@ def cmd_inbox_entry(args):
     return cmd_hop_dry_run(args) if args.dry_run else cmd_inbox(args)
 
 
+def cmd_notify(args):
+    """把定时结果推给用户本人（notify-01）。--check 只看配置不联网；--test 真发一条测试；
+    --stdin 推 wrapper 渲染好的播报（channel=none 或正文为空时什么都不做）。凭据永不回显。"""
+    path = HC.config_path(args)
+    try:
+        cfg = HC.load_config(path, create_dirs=False)
+    except (OSError, ValueError) as exc:
+        data = {"cmd": "notify", "ok": False, "sent": False, "error": "配置读不到或格式不对（%s）" % exc}
+        if want_json(args):
+            emit_json(data)
+        else:
+            print("⚠️ 推送失败：" + data["error"])
+        return 1
+    name = N.channel_name(cfg)
+    base = {"cmd": "notify", "channel": name, "label": N.label(cfg), "configured": name != "none"}
+    if args.check:
+        ok, _, found = N.check(cfg)
+        data = dict(base, ok=ok, problems=found, message=N.check_message(cfg))
+        if want_json(args):
+            emit_json(data)
+        else:
+            print(data["message"])
+        return 0 if ok else 1
+    if args.test:
+        if name == "none":
+            data = dict(base, ok=False, sent=False,
+                        message="还没配置推送渠道（notify.channel=none），没法发测试；先在 config.json 的 notify 里选渠道")
+            if want_json(args):
+                emit_json(data)
+            else:
+                print(data["message"])
+            return 1
+        text, source = N.TEST_TEXT, "test"
+    else:
+        text, source = sys.stdin.read(), args.source
+    result = N.send(cfg, text, source)
+    data = dict(base, **result)
+    lines = []
+    if result["sent"]:
+        lines = ["推送成功（%s，%s）" % (result["label"], N.SOURCES.get(source, source))]
+        data["message"] = "已推送到%s" % result["label"]
+    elif not result["ok"]:
+        lines = ["推送失败（%s，%s）：%s" % (result["label"], N.SOURCES.get(source, source), result["error"])]
+        data["message"] = "⚠️ " + lines[0]
+    if lines:
+        os.makedirs(cfg["paths"]["workdir"], exist_ok=True)
+    if want_json(args):
+        emit_json(data, cfg, lines)
+    else:
+        if lines:
+            emit(cfg, lines, quiet=True)
+        if args.test or not result["ok"]:  # 播报推送成功时不再往 stdout 加话（stdout 本身就是播报）
+            print(data.get("message") or "")
+    return 0 if result["ok"] else 1
+
+
 @locked_command
 def cmd_chat(args):
     import conversation
@@ -1984,6 +2041,16 @@ def build_parser():
     p.add_argument("--dry-run", action="store_true", help="离线校准：只校验配置、说明真跳会做什么，不开浏览器")
     add_json_flag(p)
     p.set_defaults(func=cmd_inbox_entry)
+
+    p = sub.add_parser("notify", help="把定时结果推给你本人（--check 看配置 / --test 发测试 / --stdin 推播报）")
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--check", action="store_true", help="只检查推送配置与凭据，不联网")
+    mode.add_argument("--test", action="store_true", help="真发一条测试消息到配置的渠道")
+    mode.add_argument("--stdin", action="store_true", help="把标准输入的播报推出去（wrapper 用）")
+    p.add_argument("--source", choices=["tick", "chat", "inbox", "manual"], default="manual",
+                   help="播报来自哪一跳（只影响标题）")
+    add_json_flag(p)
+    p.set_defaults(func=cmd_notify)
 
     p = sub.add_parser("run", help="扫描 + 发送 + 收件箱")
     p.add_argument("--send", type=int, help="本轮发送数（默认用 schedule.per_window）")

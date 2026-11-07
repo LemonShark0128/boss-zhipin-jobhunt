@@ -54,9 +54,21 @@ DRY=0
 for arg in "$@"; do
     [ "$arg" = "--dry-run" ] && DRY=1  # audit-01 R8：告诉播报这是干跑（tick 失败的输出未必带 dry_run）
 done
-printf '%s' "$OUT" | BOSS_TICK_DRY_RUN="$DRY" "$PYTHON" "$SCRIPT_DIR/../boss-hunt-tick-fmt.py"
+MSG=$(printf '%s' "$OUT" | BOSS_TICK_DRY_RUN="$DRY" "$PYTHON" "$SCRIPT_DIR/../boss-hunt-tick-fmt.py")
 fmt_rc=$?
 if [ "$fmt_rc" -ne 0 ]; then
-    printf '⚠️ BOSS 投递跳：播报渲染退出 %s（业务退出码 %s）\n' "$fmt_rc" "$rc"
+    FMT_ERR=$(printf '⚠️ BOSS 投递跳：播报渲染退出 %s（业务退出码 %s）' "$fmt_rc" "$rc")
+    MSG="${MSG:+$MSG
+}$FMT_ERR"
+fi
+[ -n "$MSG" ] && printf '%s\n' "$MSG"
+# notify-01：系统 cron 下没有 Agent 在场，播报按 config.notify 推给用户本人；推送成败不改业务退出码。
+# 干跑只报告推送配置，不推。
+CONFIG_OK=1  # 配置都读不到时不知道推给谁，播报只留在 stdout（与上面加锁段的报错文案对应）
+case "$OUT" in *'配置文件读不到或格式不对'*) CONFIG_OK=0 ;; esac
+if [ "$DRY" = 1 ] && [ "$CONFIG_OK" = 1 ]; then
+    printf '🧪 %s\n' "$("$PYTHON" "$REPO/scripts/boss_hunt.py" --config "$CONFIG" notify --check 2>&1)"
+elif [ -n "$MSG" ] && [ "$CONFIG_OK" = 1 ]; then
+    printf '%s\n' "$MSG" | "$PYTHON" "$REPO/scripts/boss_hunt.py" --config "$CONFIG" notify --stdin --source tick
 fi
 exit "$rc"

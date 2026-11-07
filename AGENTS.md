@@ -11,7 +11,7 @@
 |--|--|--|
 | 1 | [`README.md`](README.md) | 第一次接触：能力、依赖、风控取向 |
 | 2 | [`SKILL.md`](SKILL.md) | 要带用户走完整流程时：访谈 → 登录 → 配置 → 干跑 → 定时 |
-| 3 | [`docs/onboarding-interview.md`](docs/onboarding-interview.md) | 用户资料不全，需要一次性问完（8 必问 + 10 常被忘） |
+| 3 | [`docs/onboarding-interview.md`](docs/onboarding-interview.md) | 用户资料不全，需要一次性问完（9 必问 + 10 常被忘；第 9 条是「结果推给谁」） |
 | 4 | [`docs/risk-control.md`](docs/risk-control.md) | 任何调整频率、上限、时段之前 |
 | 5 | [`docs/troubleshooting.md`](docs/troubleshooting.md) | 报 `NO_EXTENSION` / `unverified` / 定时任务没跑 |
 | 6 | [`docs/agent-adapters.md`](docs/agent-adapters.md) | 要换成你自己的浏览器或定时能力；WorkBuddy / DeepSeek Harness / Kimi Code / MiniMax Code 的核实情况（第 6 节）；招呼语换 DeepSeek / Kimi / MiniMax（第 7 节） |
@@ -61,6 +61,21 @@ python3 scripts/boss_hunt.py validate --json         # 有错 exit=1
 才走「代理模式」：用你自己的浏览器工具按 `docs/agent-adapters.md` 的映射
 驱动同一个已登录浏览器，代价是每步吃 token，适合 ≤10 个/天或调试。
 
+## 定时结果推给谁（挂定时前必须问，别跳过）
+
+定时任务由系统 cron 跑，**跑的时候你不在场，收不到结果**；wrapper 的输出只有 Hermes 这类调度器会转发，
+其他 Agent（Codex、Claude Code、Cursor、Kimi Code、MiniMax Code、DeepSeek Harness、WorkBuddy……）都不会。
+不配推送，用户就看不到每天投了谁、哪个 HR 约了面试。所以上手时你要：
+
+1. 问用户：**定时跑完的结果推给谁、平时在哪里看消息？**（个人微信 / 企业微信 / 飞书 / 钉钉 / iPhone / 安卓 / Telegram / 邮件）
+2. 按 `docs/agent-adapters.md`「定时结果推给谁」选渠道，把 `notify.channel` 写进 `config.json`。
+3. 请用户自己把凭据写进 `~/.boss-hunt/.env`（变量名见 `docs/configuration.md`「推送」）；
+   不要让用户把 key 贴进对话，你也不要在回复里复述 key。
+4. `python3 scripts/boss_hunt.py notify --check`：显示「凭据就绪」才继续。
+5. 征得用户同意后 `python3 scripts/boss_hunt.py notify --test`，**等用户说收到了**才算配好。
+
+推送只发给用户本人；推送失败不影响投递，失败原因记在 `runs.log`。
+
 ## 交付前必须验证
 
 - `plan` 的前几条是用户真想要的方向，不是关键词硬匹配出来的噪声。
@@ -69,6 +84,7 @@ python3 scripts/boss_hunt.py validate --json         # 有错 exit=1
 - 挂定时任务前，三条 wrapper 都用**真实入口**加 `--dry-run` 跑一次（不开浏览器、不发送）：
   `bash scripts/cron/boss-hunt-tick.sh --dry-run`、`bash scripts/cron/boss-hunt-chat.sh --dry-run`、
   `bash scripts/cron/boss-hunt-inbox.sh --dry-run`；别只测 `python3 boss_hunt.py`。
+  每条最后一行「🧪 推送：…」要显示用户选的渠道「凭据就绪」，并且用户已确认收到 `notify --test` 的测试消息。
 - 定时用系统 cron / launchd 跑 wrapper，不要用你自己的「定时跑提示词」能力代替（花 token，且模型可能改参数多发）。
 
 ## 不该做的事

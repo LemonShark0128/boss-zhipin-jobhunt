@@ -252,17 +252,21 @@ class WrapperForwardsArgsTests(unittest.TestCase):
                 shutil.copy(ROOT / 'scripts' / 'boss-hunt-tick-fmt.py', repo / 'scripts' / 'boss-hunt-tick-fmt.py')
                 seen = Path(d) / 'argv.json'
                 (repo / 'scripts' / 'boss_hunt.py').write_text(
-                    'import json, sys\nopen(%r, "w").write(json.dumps(sys.argv[1:]))\n'
+                    'import json, sys\nopen(%r, "a").write(json.dumps(sys.argv[1:]) + "\\n")\n'
                     'print(json.dumps({"cmd": "x", "ok": True}))\n' % str(seen))
                 config = repo / 'config.json'
                 config.write_text(json.dumps({'paths': {'workdir': str(repo / 'data')}}))
                 env = dict(os.environ, BOSS_HUNT_CONFIG=str(config), BOSS_HUNT_PYTHON=sys.executable,
                            BOSS_BROADCAST_LOG=str(Path(d) / 'b.log'))
+                calls = lambda: [json.loads(line) for line in seen.read_text().splitlines()]  # noqa: E731
                 subprocess.run(['bash', str(cron / name), '--dry-run'], env=env, capture_output=True, text=True)
-                argv = json.loads(seen.read_text())
+                argv = calls()[0]
                 self.assertEqual(argv[-2:], [sub, '--dry-run'], argv)
+                # notify-01：干跑之后 wrapper 只做推送检查（--check），绝不 --stdin 真推
+                self.assertEqual([c[-2:] for c in calls()[1:]], [['notify', '--check']])
+                seen.unlink()
                 subprocess.run(['bash', str(cron / name)], env=env, capture_output=True, text=True)
-                self.assertEqual(json.loads(seen.read_text())[-1], sub)
+                self.assertEqual(calls()[0][-1], sub)
 
 
 class InterviewCountExcludesRepliedTests(unittest.TestCase):

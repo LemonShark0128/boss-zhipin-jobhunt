@@ -18,6 +18,7 @@
 - **收件箱与对话**：收件箱只读分类；对话模块按轮次问清工作要求、薪资结构、面试轮数与能否线上，
   面试时间、期望薪资等需要你本人决定的问题一律转人工。
 - **定时运行**：投递、对话、收件箱三条 cron 入口共用单实例锁，挂定时前都可以加 `--dry-run` 离线校准。
+- **结果推送**：每跳播报推到你选的渠道：微信（Server酱 / PushPlus）、企业微信、飞书、钉钉、Bark、ntfy、Telegram、邮件或自定义命令。
 - **结构化输出**：所有命令支持 `--json`，便于脚本和 Agent 解析。
 
 ## 工作原理
@@ -80,6 +81,11 @@ python3 scripts/boss_hunt.py init            # 生成 ~/.boss-hunt/config.json
    bash scripts/cron/boss-hunt-chat.sh --dry-run    # 对话：是否开启、是否在时段内
    bash scripts/cron/boss-hunt-inbox.sh --dry-run   # 收件箱：配置是否可用
    ```
+   定时运行时你不在电脑前，先配好结果推给谁（[配置说明 · 推送](docs/configuration.md#推送定时结果推给谁)），再发一条测试：
+   ```bash
+   python3 scripts/boss_hunt.py notify --check
+   python3 scripts/boss_hunt.py notify --test
+   ```
 
 ## 作为 Agent 技能使用
 
@@ -89,7 +95,7 @@ python3 scripts/boss_hunt.py init            # 生成 ~/.boss-hunt/config.json
 | Codex、Cursor、Kimi Code、MiniMax Code 等读 `AGENTS.md` 的 Agent | `AGENTS.md` | 在仓库根打开即可，无需安装 |
 | 只能执行 shell 的脚本或自建 harness | `scripts/boss_hunt.py` | 直接调用命令，加 `--json` 解析输出 |
 
-接入后 Agent 会按「访谈 → 登录 → 配置 → 干跑 → 定时」带你走一遍。MiniMax Code 已实测按 `AGENTS.md` 的指引自行跑通离线上手流程；
+接入后 Agent 会按「访谈 → 登录 → 配置 → 干跑 → 定时」带你走一遍，挂定时前会问你结果推给谁并帮你配好。MiniMax Code 已实测按 `AGENTS.md` 的指引自行跑通离线上手流程；
 各 Agent 的装载目录、执行 shell 与定时能力（含 WorkBuddy、DeepSeek Harness 的核实情况）见 [agent-adapters.md](docs/agent-adapters.md)。
 
 ## 文档
@@ -125,7 +131,8 @@ python3 scripts/boss_hunt.py init            # 生成 ~/.boss-hunt/config.json
 
 **数据会上传到哪？**
 运行数据（`state.json`、岗位快照、发送流水、对话记录）都保存在本机 `~/.boss-hunt/`，不会上传。
-唯一例外是模型：用本地 Ollama 时不出本机；配成云端服务商时，岗位 JD 片段、你的事实清单和 HR 原话会作为提示词发给该服务商。
+例外有两个：一是模型，用本地 Ollama 时不出本机，配成云端服务商时，岗位 JD 片段、你的事实清单和 HR 原话会作为提示词发给该服务商；
+二是推送，配了 `notify` 后每跳播报（公司、职位、HR 原话摘要）会发到你选的推送服务。
 
 ## 目录结构
 

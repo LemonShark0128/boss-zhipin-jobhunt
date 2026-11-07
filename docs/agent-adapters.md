@@ -60,7 +60,7 @@ Hermes 与 Claude Code 是同一个格式，**不需要维护两份**。
 ```
 
 三个 wrapper 共用 `<workdir>/.wrapperlock`（上一跳没跑完时这一跳静默跳过，不会撞锁报错）、
-保留业务退出码、在 macOS 上自带 `caffeinate` 防睡眠，stdout 是一段可直接推送的人话；
+保留业务退出码、在 macOS 上自带 `caffeinate` 防睡眠，stdout 是一段可直接推送的人话，并按 `notify` 推给用户本人；
 配置路径默认 `~/.boss-hunt/config.json`，可用 `BOSS_HUNT_CONFIG` 覆盖。
 没开对话模块（`conversation.enabled=false`）就不用挂对话跳。
 
@@ -77,6 +77,26 @@ bash scripts/cron/boss-hunt-inbox.sh --dry-run   # 配置能不能过、真跳�
 
 `chat --dry-run`（离线校准）和 `chat --dry`（预演）不是一回事：`--dry` 会真的连浏览器、打开会话（清未读），
 只是不发送；新用户第一次校准用 `--dry-run`。
+
+### 定时结果推给谁（每个 Agent 上手时都要问）
+
+系统 cron 跑 wrapper 时**没有任何 Agent 在场**：wrapper 的 stdout 只有会转发输出的调度器（Hermes）能推到用户手里，
+其余 Agent 都收不到。所以无论用哪个 Agent 接入，挂定时前都要按 `AGENTS.md`「定时结果推给谁」问用户、
+配 `notify.channel`、跑 `notify --check`，再征得同意跑 `notify --test` 并等用户确认收到。渠道与凭据见
+[configuration.md](configuration.md#推送定时结果推给谁)。
+
+| Agent | 定时结果会不会自己回到 Agent / 用户手里 | `notify.channel` 建议 |
+|--|--|--|
+| Hermes | 会：`cronjob_manage` 把 wrapper 的 stdout 推到 Hermes 配的渠道（如微信） | `none`（再配一个渠道会收到两份） |
+| Claude Code | 不会：系统 cron 的输出不进 Claude Code；`/loop` 绑会话 | 选一个渠道 |
+| Codex CLI / Cursor | 不会：没有常驻调度 | 选一个渠道 |
+| Kimi Code | 不会：`CronCreate` 绑会话，系统 cron 的输出不回 Kimi Code | 选一个渠道 |
+| MiniMax Code | 不会：`mcode exec` 是一次性运行 | 选一个渠道 |
+| DeepSeek Harness | 未核实（`schedule/` 包的行为没写），按「不会」处理 | 选一个渠道 |
+| WorkBuddy | 未核实：「自动化」跑的是提示词，能否接收系统 cron 的输出没写，按「不会」处理 | 选一个渠道 |
+
+用户在 Agent 里问「今天投了几个、谁回了」时，Agent 跑 `summary --json` / `unanswered --json` 回答即可；
+推送解决的是「人不在电脑前时也能收到」。
 
 ## 4. 结构化输出（harness 集成）
 
@@ -134,7 +154,8 @@ python3 scripts/boss_hunt.py send  --json 3 | jq '{sent, day_count, skipped: (.s
 3. **定时**：一律用系统 `crontab` / `launchd` 跑仓库 wrapper（第 3 节），**不要**用 harness 自带的定时：
    那是「定时让模型跑一段提示词」，每跳都花 token、模型可能自作主张多发或改参数，
    Kimi 的定时还绑在会话上、关掉就没了。
-4. **接入后验收**：让 harness 跑一遍第 3 节的三条 `--dry-run`，再按 `AGENTS.md`「交付前必须验证」逐条核对。
+4. **接入后验收**：问清「定时结果推给谁」并配好推送（第 3 节末尾），让 harness 跑一遍第 3 节的三条 `--dry-run`，
+   再按 `AGENTS.md`「交付前必须验证」逐条核对。
 5. **三条红线不随 harness 变**：不替用户答应面试时间、不编用户没给的信息、不交换电话/微信；
    harness 只驱动用户自己已登录的浏览器，看到登录墙就停。
 

@@ -3,7 +3,7 @@
 目标是在 10 分钟内把用户的情况变成一份 `config.json`。**一次问完，不要来回追问**；
 每条给默认值，用户说不清就用默认值先跑，之后调配置即可。
 
-## 必问（8 条，缺一条配置就跑不起来）
+## 必问（9 条，缺一条配置就跑不起来）
 
 | # | 问题 | 落到配置 | 默认/建议 |
 |--|--|--|--|
@@ -15,6 +15,23 @@
 | 6 | 你的三段硬成绩（带数字） | `user.highlights` | 招呼语素材，见下 |
 | 7 | 每天最多发几个？ | `sending.daily_cap`、`min_gap_seconds` | 15–20 个 / 间隔 60s |
 | 8 | HR 约面试时怎么回？ | `user.interview_reply` | 默认「请先给时段，我确认后答复」 |
+| 9 | 定时任务的结果推给谁？你平时在哪里看消息（微信 / 企业微信 / 飞书 / 钉钉 / iPhone 通知 / Telegram / 邮件）？ | `notify.channel` + 凭据写 `~/.boss-hunt/.env` | 见下方「第 9 条怎么配」 |
+
+### 第 9 条怎么配（结果推给谁）
+
+系统 cron 跑定时任务时，你（Agent）不在场，**收不到任何结果**；除了 Hermes 这类会把 wrapper 输出转发出去的调度器，
+用户也收不到。所以挂定时前必须问清楚、配好、发一条测试：
+
+1. 问用户在哪里看消息，按下表推荐渠道（详细字段见 `docs/configuration.md`「推送」）：
+   用 Hermes 推微信的 → `none`；想在个人微信收 → `serverchan` 或 `pushplus`；
+   公司用企业微信 / 飞书 / 钉钉 → 建一个只有自己的群，加群机器人，选 `wecom` / `feishu` / `dingtalk`；
+   iPhone → `bark`；安卓或多设备 → `ntfy`；海外 → `telegram`；只想要邮件 → `email`。
+2. 把 `notify.channel`（email 还要 `notify.email`）写进 `config.json`。
+3. **凭据请用户自己写进 `~/.boss-hunt/.env`**（变量名见 `docs/configuration.md`「推送」），
+   不要让用户把 key 贴进对话，你也不要在回复里复述。
+4. 跑 `python3 scripts/boss_hunt.py notify --check`，有问题按提示改。
+5. 征得用户同意后跑 `python3 scripts/boss_hunt.py notify --test`，**等用户确认手机上真收到了**才算配好。
+   没收到就看 `runs.log` 里的「推送失败」原因。
 
 ## 用户常忘、必须主动提的 10 件事
 
@@ -31,8 +48,8 @@
    用户需要的话，在对话模块上新做，先问用户。
 7. **面试时间绝不由你代答**：`interview_reply` 只能是「请给时段，我确认后回复」。
    用户若说「我时间随便，你替我定」——也不行，仍要他把时间发给你确认。
-8. **报告推到哪**：cron 输出直接进聊天/微信。每跳固定一行概览；回消息跳最多列 3 条约面试原话，
-   对话跳只推需要人看的会话。`inbox.max_listed`（默认 5）只影响 `runs.log` 里列几条。
+8. **推送会推什么**：每跳固定一行概览；回消息跳最多列 3 条约面试原话，对话跳只推需要人看的会话
+   （推给谁是必问第 9 条）。`inbox.max_listed`（默认 5）只影响 `runs.log` 里列几条。
 9. **时区**：`schedule.timezone` 是「几点跑」的口径。机器时区和用户时区不一致时，
    cron 按配置时区求值，别换算。
 10. **账号风险**：同一账号不要同时开两套自动化（别的脚本 + 这个），也不要一天里机器连发几十条。
@@ -79,15 +96,17 @@
 4. 一切正常再 `send 5`，最后才交给 cron。
 5. 挂 cron 前，用真实入口把三条 wrapper 都干跑一遍（不开浏览器、不发送）：
    `bash scripts/cron/boss-hunt-tick.sh --dry-run`、`bash scripts/cron/boss-hunt-chat.sh --dry-run`、
-   `bash scripts/cron/boss-hunt-inbox.sh --dry-run`，都以 🧪 开头才算接对了。
+   `bash scripts/cron/boss-hunt-inbox.sh --dry-run`，都以 🧪 开头才算接对了；最后一行「🧪 推送：…」要显示
+   用户选的渠道「凭据就绪」（用 Hermes 转发的显示未配置脚本推送，也对）。
 
 新用户从零的完整顺序：`init` → 改配置 → `validate` → `template` → `login-check` → `scan --pages 1` →
-`plan --top 15` → `tick --dry-run` → 三条 wrapper `--dry-run` → 用户同意后 `send 1`。
+`plan --top 15` → 问清推给谁并 `notify --check` → 用户同意后 `notify --test`、确认收到 → `tick --dry-run` →
+三条 wrapper `--dry-run` → 用户同意后 `send 1`。
 招呼语想用云端模型（DeepSeek / Kimi / MiniMax）时顺带问一句：用哪家、key 放在哪（只问变量名，不要 key 本身），
 配置见 `docs/agent-adapters.md` 第 7 节。
 
 ## 交接话术（首次对话可直接用）
 
-> 我可以帮你把 BOSS 上的筛选和打招呼做成自动的，但需要你先确认 8 件事：
+> 我可以帮你把 BOSS 上的筛选和打招呼做成自动的，但需要你先确认 9 件事：
 > 岗位关键词、城市、薪资下限、年限学历、绝对不投的行业、三段带数字的成绩、每天最多发几个、
-> 面试怎么回。你先把浏览器里的 BOSS 登录好（手机扫码），剩下的我来配。
+> 面试怎么回，以及定时跑完的结果推给谁（你平时在哪看消息）。你先把浏览器里的 BOSS 登录好（手机扫码），剩下的我来配。

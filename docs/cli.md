@@ -15,7 +15,13 @@ python3 scripts/boss_hunt.py inbox [--dry-run]    # 盯消息 + 分类（只读�
 python3 scripts/boss_hunt.py chat  [--dry-run]    # 对话模块：回 HR / 发简历（会真发）；--dry-run 离线校准，--dry 连浏览器预演
 python3 scripts/boss_hunt.py tick  [--dry-run]    # 定时投递跳入口：按窗口补池 + 投递
 python3 scripts/boss_hunt.py run   [--send N] [--inbox]   # 手动一键，定时任务不用它
+python3 scripts/boss_hunt.py notify --check       # 推送配置与凭据是否就绪（不联网）
+python3 scripts/boss_hunt.py notify --test        # 真发一条测试到你配置的渠道
 ```
+
+`notify --stdin [--source tick|chat|inbox]` 由 wrapper 调用，把渲染好的播报推出去，一般不用手敲。
+加 `--json` 时输出 `channel` / `label` / `configured` / `ok`，`--check` 另有 `problems[]`，发送时另有 `sent` / `error`；
+任何输出都不含凭据。渠道与凭据见 [configuration.md](configuration.md#推送定时结果推给谁)。
 
 配置查找顺序：`--config PATH` → `$BOSS_HUNT_CONFIG` → `~/.boss-hunt/config.json`。
 运行数据（`config.json`、`state.json`、`raw/`、`runs.log`、`send_ledger.jsonl`、`conversations.json`）默认在

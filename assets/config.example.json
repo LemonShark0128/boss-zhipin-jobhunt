@@ -161,6 +161,10 @@
     "scan_pages": 2,
     "_tip": "cron 挂在 windows 整点调用 tick（开了对话模块别用每 10 分钟，会和 :30 对话跳抢锁）；同一天同窗口成功后跳过重复执行。carry_over=false 使用固定 per_window 总上限。"
   },
+  "_notify_tip": "定时结果推给谁（Agent 上手时必须问你）。none=不由脚本推：用 Hermes 等会转发 wrapper 输出的调度器，或只看 runs.log。可选 serverchan / pushplus（微信）、wecom / feishu / dingtalk（群机器人）、bark / ntfy（手机通知）、telegram、email、command。凭据写 ~/.boss-hunt/.env，不写这里；配好跑 notify --check，再 notify --test。详见 docs/configuration.md「推送」。",
+  "notify": {
+    "channel": "none"
+  },
   "transport": {
     "kind": "huashu",
     "bridge_port": 8899,

@@ -5,6 +5,24 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-06
+
+### 新增 · 定时结果推给你本人
+- 系统 cron 跑 wrapper 时没有 Agent 在场，以前只有会转发 wrapper 输出的调度器（如 Hermes）能把播报送到你手里；
+  用 Kimi Code、MiniMax Code、Claude Code、Codex 等接入时收不到任何定时结果。现在三条 wrapper 渲染完播报后按
+  `config.notify.channel` 推出去：`serverchan` / `pushplus`（微信）、`wecom` / `feishu` / `dingtalk`（群机器人，支持签名）、
+  `bark` / `ntfy`（手机通知）、`telegram`、`email`、`command`（自定义脚本）；默认 `none`（交给调度器）。
+- 推送失败只记 `runs.log`，不影响投递、不改 wrapper 退出码；`--dry-run` 不推，只在最后一行报告推送配置是否就绪。
+- 新子命令 `notify --check`（不联网检查）/ `notify --test`（真发一条测试）/ `notify --stdin`（wrapper 用）。
+  凭据只从环境变量或 `~/.boss-hunt/.env` 读，不写进 `config.json`；任何输出都不回显凭据。
+- `validate` 对推送配置只给警告，不挡投递；示例配置新增 `notify.channel`。
+
+### 文档
+- `AGENTS.md`、`SKILL.md`、访谈清单（必问第 9 条「结果推给谁」）：要求每个平台的 Agent 上手时问清推给谁、
+  请用户自己写凭据、跑 `notify --check`，征得同意后 `notify --test` 并等用户确认收到。
+- `docs/agent-adapters.md` 列出各 Agent 能否自己收到定时结果；`docs/configuration.md`「推送」逐渠道写明凭据变量名、
+  设置要点与接口核实情况（钉钉未核实，Bark、Server酱 Turbo 部分核实）。
+
 ## [0.4.2] - 2026-11-06
 
 ### 文档

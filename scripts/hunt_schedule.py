@@ -7,6 +7,7 @@ import time
 import greet as G
 import hunt_config as HC
 import hunt_filter as HF
+import notify as N
 
 
 def validate_cfg(cfg):
@@ -106,6 +107,7 @@ def _validate_cfg(cfg, errs, warns):
         if hi > 220:
             warns.append("greeting.length.max=%d 偏长，HR 在手机上多半看不到结尾" % hi)
     _llm_provider_checks(cfg, gb, errs, warns)
+    warns.extend(N.problems(cfg))  # notify-01：推送配错只提醒，不挡投递跳
     g = cfg.get("grading") or {}
     tracks = g.get("tracks") or {"A": {}, "B": {}}
     if not isinstance(tracks, dict):
